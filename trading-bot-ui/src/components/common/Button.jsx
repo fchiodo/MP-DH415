@@ -5,10 +5,11 @@ const variants = {
   outline: 'border border-slate-300 dark:border-[#324d67] bg-white dark:bg-[#192633] text-slate-700 dark:text-white hover:bg-slate-100 dark:hover:bg-[#233648]',
 }
 
-function Button({ variant = 'primary', children, icon, className = '', ...props }) {
+function Button({ variant = 'primary', children, icon, className = '', disabled = false, ...props }) {
   return (
     <button
-      className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg h-10 px-4 text-sm font-bold transition-all ${variants[variant]} ${className}`}
+      className={`flex items-center justify-center gap-2 rounded-lg h-10 px-4 text-sm font-bold transition-all ${variants[variant]} ${className} ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+      disabled={disabled}
       {...props}
     >
       {icon && <span className="material-symbols-outlined text-[18px]">{icon}</span>}

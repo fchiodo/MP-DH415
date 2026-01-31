@@ -17,6 +17,8 @@ function Settings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
+  const [showFxcmPassword, setShowFxcmPassword] = useState(false)
+  const [showSlackToken, setShowSlackToken] = useState(false)
   
   const [config, setConfig] = useState({
     loginId: '',
@@ -130,12 +132,78 @@ function Settings() {
     setConfig(prev => ({ ...prev, [field]: !prev[field] }))
   }
 
-  const testConnection = async () => {
-    setMessage({ type: 'info', text: 'Testing connection...' })
-    // TODO: Implement actual FXCM connection test
-    setTimeout(() => {
-      setMessage({ type: 'success', text: 'Connection test not yet implemented' })
-    }, 1000)
+  const [testingFxcm, setTestingFxcm] = useState(false)
+  const [testingSlack, setTestingSlack] = useState(false)
+
+  const testFxcmConnection = async () => {
+    setTestingFxcm(true)
+    setMessage({ type: 'info', text: 'Testing FXCM connection...' })
+    
+    try {
+      const response = await fetch(`${API_URL}/api/test/fxcm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          loginId: config.loginId,
+          password: config.password,
+          url: config.url,
+          connection: config.connection,
+        }),
+      })
+      
+      const data = await response.json()
+      
+      if (data.success) {
+        let successMsg = `FXCM connection successful! Server: ${data.server}`
+        if (data.account) {
+          successMsg += ` | Balance: $${data.account.balance?.toFixed(2) || 'N/A'}`
+        }
+        setMessage({ type: 'success', text: successMsg })
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Connection failed' })
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: 'Failed to test connection. Is the API server running?' })
+    } finally {
+      setTestingFxcm(false)
+    }
+  }
+
+  const testSlackConnection = async () => {
+    setTestingSlack(true)
+    setMessage({ type: 'info', text: 'Testing Slack connection...' })
+    
+    try {
+      const response = await fetch(`${API_URL}/api/test/slack`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          botToken: config.slackToken,
+          channel: config.slackChannel,
+        }),
+      })
+      
+      const data = await response.json()
+      
+      if (data.success) {
+        let successMsg = `Slack connected as @${data.bot?.name || 'bot'}`
+        if (data.channel) {
+          successMsg += data.channel.accessible 
+            ? ` | Channel ${data.channel.name} accessible` 
+            : ` | Warning: ${data.warning || 'Channel not accessible'}`
+        }
+        setMessage({ 
+          type: data.warning ? 'warning' : 'success', 
+          text: successMsg 
+        })
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Connection failed' })
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: 'Failed to test Slack. Is the API server running?' })
+    } finally {
+      setTestingSlack(false)
+    }
   }
 
   if (loading) {
@@ -157,7 +225,6 @@ function Settings() {
           </p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" onClick={testConnection}>Test Connection</Button>
           <Button variant="primary" onClick={saveConfig} disabled={saving}>
             {saving ? 'Saving...' : 'Save Changes'}
           </Button>
@@ -169,10 +236,13 @@ function Settings() {
         <div className={`mb-6 p-4 rounded-lg flex items-center gap-3 ${
           message.type === 'success' ? 'bg-green-500/10 border border-green-500/20 text-green-500' :
           message.type === 'error' ? 'bg-red-500/10 border border-red-500/20 text-red-500' :
+          message.type === 'warning' ? 'bg-amber-500/10 border border-amber-500/20 text-amber-500' :
           'bg-primary/10 border border-primary/20 text-primary'
         }`}>
           <span className="material-symbols-outlined">
-            {message.type === 'success' ? 'check_circle' : message.type === 'error' ? 'error' : 'info'}
+            {message.type === 'success' ? 'check_circle' : 
+             message.type === 'error' ? 'error' : 
+             message.type === 'warning' ? 'warning' : 'info'}
           </span>
           <p className="text-sm font-medium">{message.text}</p>
         </div>
@@ -180,9 +250,18 @@ function Settings() {
 
       {/* FXCM Connection Section */}
       <div className="mb-10">
-        <div className="flex items-center gap-2 px-4 pb-3 pt-5">
-          <span className="material-symbols-outlined text-primary">api</span>
-          <h2 className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em]">FXCM Connection</h2>
+        <div className="flex items-center justify-between px-4 pb-3 pt-5">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary">api</span>
+            <h2 className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em]">FXCM Connection</h2>
+          </div>
+          <Button 
+            variant="outline" 
+            onClick={testFxcmConnection} 
+            disabled={testingFxcm || !config.loginId || !config.password}
+          >
+            {testingFxcm ? 'Testing...' : 'Test Connection'}
+          </Button>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-slate-50 dark:bg-[#192633]/50 rounded-xl border border-slate-200 dark:border-[#233648]">
           <div className="flex flex-col gap-4">
@@ -198,13 +277,24 @@ function Settings() {
             </label>
             <label className="flex flex-col flex-1">
               <p className="text-slate-700 dark:text-white text-sm font-medium pb-2">Password</p>
-              <input
-                className="w-full rounded-lg text-slate-900 dark:text-white border border-slate-300 dark:border-[#324d67] bg-white dark:bg-[#101922] focus:border-primary focus:ring-1 focus:ring-primary h-12 p-4 text-sm font-normal"
-                placeholder="••••••••"
-                type="password"
-                value={config.password}
-                onChange={(e) => setConfig(prev => ({ ...prev, password: e.target.value }))}
-              />
+              <div className="relative">
+                <input
+                  className="w-full rounded-lg text-slate-900 dark:text-white border border-slate-300 dark:border-[#324d67] bg-white dark:bg-[#101922] focus:border-primary focus:ring-1 focus:ring-primary h-12 p-4 pr-12 text-sm font-normal"
+                  placeholder="••••••••"
+                  type={showFxcmPassword ? 'text' : 'password'}
+                  value={config.password}
+                  onChange={(e) => setConfig(prev => ({ ...prev, password: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowFxcmPassword(!showFxcmPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[20px]">
+                    {showFxcmPassword ? 'visibility_off' : 'visibility'}
+                  </span>
+                </button>
+              </div>
             </label>
           </div>
           <div className="flex flex-col gap-4">
@@ -305,21 +395,41 @@ function Settings() {
 
       {/* Slack Notifications Section */}
       <div className="mb-10">
-        <div className="flex items-center gap-2 px-4 pb-3 pt-5">
-          <span className="material-symbols-outlined text-primary">chat</span>
-          <h2 className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em]">Slack Notifications</h2>
+        <div className="flex items-center justify-between px-4 pb-3 pt-5">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary">chat</span>
+            <h2 className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em]">Slack Notifications</h2>
+          </div>
+          <Button 
+            variant="outline" 
+            onClick={testSlackConnection} 
+            disabled={testingSlack || !config.slackToken}
+          >
+            {testingSlack ? 'Testing...' : 'Test Slack'}
+          </Button>
         </div>
         <div className="p-4 bg-slate-50 dark:bg-[#192633]/50 rounded-xl border border-slate-200 dark:border-[#233648]">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <label className="flex flex-col">
               <p className="text-slate-700 dark:text-white text-sm font-medium pb-2">Bot Token</p>
-              <input
-                className="w-full rounded-lg text-slate-900 dark:text-white border border-slate-300 dark:border-[#324d67] bg-white dark:bg-[#101922] focus:border-primary h-12 p-4 text-sm font-normal font-mono"
-                placeholder="xoxb-your-token"
-                type="password"
-                value={config.slackToken}
-                onChange={(e) => setConfig(prev => ({ ...prev, slackToken: e.target.value }))}
-              />
+              <div className="relative">
+                <input
+                  className="w-full rounded-lg text-slate-900 dark:text-white border border-slate-300 dark:border-[#324d67] bg-white dark:bg-[#101922] focus:border-primary h-12 p-4 pr-12 text-sm font-normal font-mono"
+                  placeholder="xoxb-your-token"
+                  type={showSlackToken ? 'text' : 'password'}
+                  value={config.slackToken}
+                  onChange={(e) => setConfig(prev => ({ ...prev, slackToken: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowSlackToken(!showSlackToken)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[20px]">
+                    {showSlackToken ? 'visibility_off' : 'visibility'}
+                  </span>
+                </button>
+              </div>
             </label>
             <label className="flex flex-col">
               <p className="text-slate-700 dark:text-white text-sm font-medium pb-2">Channel Name</p>

@@ -6,8 +6,10 @@ import ActivityLog from '../components/dashboard/ActivityLog'
 function Dashboard() {
   const { 
     botStatus, 
-    activeTrades, 
+    activeTrades,
+    isLoadingTrades,
     activityLogs, 
+    clearLogs,
     stats 
   } = useApp()
 
@@ -52,10 +54,10 @@ function Dashboard() {
       </div>
 
       {/* Pairs Table */}
-      <PairsTable trades={activeTrades} />
+      <PairsTable trades={activeTrades} isLoading={isLoadingTrades} />
 
       {/* Activity Log */}
-      <ActivityLog logs={activityLogs} onClear={() => {}} />
+      <ActivityLog logs={activityLogs} onClear={clearLogs} />
     </div>
   )
 }

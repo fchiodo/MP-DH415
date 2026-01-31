@@ -22,7 +22,7 @@ app = Flask(__name__)
 # Enable CORS for React frontend - explicit configuration
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
+        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
@@ -128,22 +128,19 @@ def get_trades():
     try:
         cursor = conn.cursor()
         
-        # Get active trades
+        # Get all trades from the 'trades' table
         cursor.execute('''
-            SELECT * FROM trade 
-            WHERE (in_progress = 1 OR in_retest = 1)
-            ORDER BY timestamp DESC
+            SELECT rowid, pair, status, trade_type, entry_date, close_date, 
+                   entry_price, stop_loss, target, direction, 
+                   initial_risk_reward, final_risk_reward, profit, result
+            FROM trades 
+            ORDER BY entry_date DESC
         ''')
-        active_trades = [dict(row) for row in cursor.fetchall()]
+        all_trades = [dict(row) for row in cursor.fetchall()]
         
-        # Get closed trades
-        cursor.execute('''
-            SELECT * FROM trade 
-            WHERE closed = 1
-            ORDER BY timestamp DESC
-            LIMIT 50
-        ''')
-        closed_trades = [dict(row) for row in cursor.fetchall()]
+        # Separate active vs closed based on status
+        active_trades = [t for t in all_trades if t.get('status') in ('active', 'retest', 'waiting', 'in_progress')]
+        closed_trades = [t for t in all_trades if t.get('status') in ('closed', 'completed', 'stopped')]
         
         conn.close()
         
@@ -151,8 +148,65 @@ def get_trades():
             'active': active_trades,
             'closed': closed_trades,
         })
+    except sqlite3.OperationalError as e:
+        return jsonify({'active': [], 'closed': [], 'message': f'Table error: {str(e)}'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trades/active', methods=['GET'])
+def get_active_trades():
+    """Get active trades formatted for the Forex Pairs Monitoring table"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'trades': []})
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Get trades that are not closed (case-insensitive)
+        cursor.execute('''
+            SELECT rowid, pair, status, direction, entry_price, initial_risk_reward
+            FROM trades 
+            WHERE UPPER(status) NOT IN ('CLOSED', 'COMPLETED', 'STOPPED')
+              AND close_date IS NULL
+            ORDER BY entry_date DESC
+        ''')
+        rows = cursor.fetchall()
+        
+        trades = []
+        for row in rows:
+            rr = row['initial_risk_reward']
+            # Format risk/reward as "1:X.X"
+            rr_formatted = f"1:{rr:.1f}" if rr else "1:0.0"
+            
+            # Map status to UI values (case-insensitive)
+            status_raw = (row['status'] or 'active').upper()
+            if status_raw in ('IN_PROGRESS', 'OPEN', 'ACTIVE'):
+                status = 'active'
+            elif status_raw in ('IN RETEST', 'IN_RETEST', 'WAITING_RETEST', 'RETEST_PENDING', 'RETEST'):
+                status = 'retest'
+            elif status_raw in ('WAITING', 'PENDING'):
+                status = 'waiting'
+            else:
+                status = 'active'
+            
+            trades.append({
+                'id': row['rowid'],
+                'pair': row['pair'],
+                'status': status,
+                'direction': row['direction'] or 'LONG',
+                'entryPrice': row['entry_price'] or 0,
+                'riskReward': rr_formatted,
+            })
+        
+        conn.close()
+        
+        return jsonify({'trades': trades})
+    except sqlite3.OperationalError as e:
+        return jsonify({'trades': [], 'message': f'Table error: {str(e)}'})
+    except Exception as e:
+        return jsonify({'trades': [], 'error': str(e)})
 
 
 @app.route('/api/trades/stats', methods=['GET'])
@@ -171,26 +225,253 @@ def get_trade_stats():
     try:
         cursor = conn.cursor()
         
-        # Active trades count
-        cursor.execute('SELECT COUNT(*) FROM trade WHERE in_progress = 1')
+        # Active trades count (not closed)
+        cursor.execute('''
+            SELECT COUNT(*) FROM trades 
+            WHERE (status NOT IN ('closed', 'completed', 'stopped') OR status IS NULL)
+              AND close_date IS NULL
+        ''')
         active_count = cursor.fetchone()[0]
         
-        # Waiting retest count
-        cursor.execute('SELECT COUNT(*) FROM trade WHERE in_retest = 1')
+        # Waiting retest count (case-insensitive)
+        cursor.execute('''
+            SELECT COUNT(*) FROM trades 
+            WHERE UPPER(status) IN ('IN RETEST', 'IN_RETEST', 'RETEST', 'WAITING_RETEST', 'RETEST_PENDING', 'WAITING')
+        ''')
         retest_count = cursor.fetchone()[0]
         
         # Total closed trades
-        cursor.execute('SELECT COUNT(*) FROM trade WHERE closed = 1')
+        cursor.execute('''
+            SELECT COUNT(*) FROM trades 
+            WHERE status IN ('closed', 'completed', 'stopped') OR close_date IS NOT NULL
+        ''')
         total_closed = cursor.fetchone()[0]
+        
+        # Calculate win rate
+        cursor.execute('''
+            SELECT COUNT(*) FROM trades 
+            WHERE result = 'win' OR profit > 0
+        ''')
+        wins = cursor.fetchone()[0]
+        
+        win_rate = (wins / total_closed * 100) if total_closed > 0 else 0
+        
+        # Calculate today's profit (trades closed today)
+        cursor.execute('''
+            SELECT SUM(CAST(profit AS REAL)) FROM trades 
+            WHERE close_date LIKE ?
+        ''', (datetime.now().strftime('%Y-%m-%d') + '%',))
+        today_profit_result = cursor.fetchone()[0]
+        today_profit = today_profit_result if today_profit_result else 0
         
         conn.close()
         
         return jsonify({
             'activeTrades': active_count,
             'waitingRetest': retest_count,
-            'todayProfit': 0,  # TODO: Calculate from actual P/L
+            'todayProfit': today_profit,
             'totalTrades': total_closed,
-            'winRate': 0,  # TODO: Calculate from results
+            'winRate': round(win_rate, 1),
+        })
+    except sqlite3.OperationalError as e:
+        return jsonify({
+            'activeTrades': 0,
+            'waitingRetest': 0,
+            'todayProfit': 0,
+            'totalTrades': 0,
+            'winRate': 0,
+            'message': f'Table error: {str(e)}'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# PERFORMANCE ENDPOINTS
+# ============================================================================
+
+@app.route('/api/performance', methods=['GET'])
+def get_performance():
+    """Get performance data for the Performance page"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({
+            'stats': {},
+            'recentTrades': [],
+            'pairPerformance': []
+        })
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Get time filter from query params (default: all)
+        time_filter = request.args.get('period', 'all')
+        direction_filter = request.args.get('direction', 'all')
+        
+        # Build date filter
+        date_condition = ""
+        if time_filter == '24h':
+            date_condition = "AND close_date >= datetime('now', '-1 day')"
+        elif time_filter == '7d':
+            date_condition = "AND close_date >= datetime('now', '-7 days')"
+        elif time_filter == 'month':
+            date_condition = "AND close_date >= datetime('now', '-30 days')"
+        elif time_filter == 'quarter':
+            date_condition = "AND close_date >= datetime('now', '-90 days')"
+        elif time_filter == 'ytd':
+            date_condition = f"AND close_date >= '{datetime.now().year}-01-01'"
+        
+        # Build direction filter
+        direction_condition = ""
+        if direction_filter == 'long':
+            direction_condition = "AND UPPER(direction) = 'LONG'"
+        elif direction_filter == 'short':
+            direction_condition = "AND UPPER(direction) = 'SHORT'"
+        
+        # ========== STATS ==========
+        # Total closed trades
+        cursor.execute(f'''
+            SELECT COUNT(*) FROM trades 
+            WHERE UPPER(status) = 'CLOSED' {date_condition} {direction_condition}
+        ''')
+        total_trades = cursor.fetchone()[0]
+        
+        # Wins (TARGET hit)
+        cursor.execute(f'''
+            SELECT COUNT(*) FROM trades 
+            WHERE UPPER(result) = 'TARGET' {date_condition} {direction_condition}
+        ''')
+        wins = cursor.fetchone()[0]
+        
+        # Losses (STOP LOSS hit)
+        cursor.execute(f'''
+            SELECT COUNT(*) FROM trades 
+            WHERE UPPER(result) = 'STOP LOSS' {date_condition} {direction_condition}
+        ''')
+        losses = cursor.fetchone()[0]
+        
+        # Win rate
+        total_with_result = wins + losses
+        win_rate = (wins / total_with_result * 100) if total_with_result > 0 else 0
+        
+        # Average R:R
+        cursor.execute(f'''
+            SELECT AVG(initial_risk_reward) FROM trades 
+            WHERE UPPER(status) = 'CLOSED' AND initial_risk_reward > 0 
+            {date_condition} {direction_condition}
+        ''')
+        avg_rr_result = cursor.fetchone()[0]
+        avg_rr = avg_rr_result if avg_rr_result else 0
+        
+        # Total profit in R (wins * avg_rr - losses)
+        # Approximate: each win = avg R:R, each loss = -1R
+        total_profit_r = (wins * avg_rr) - losses if avg_rr > 0 else wins - losses
+        
+        # ========== RECENT TRADES ==========
+        cursor.execute(f'''
+            SELECT rowid, pair, direction, trade_type, entry_price, result, 
+                   initial_risk_reward, final_risk_reward, entry_date, close_date
+            FROM trades 
+            WHERE UPPER(status) = 'CLOSED' AND result IS NOT NULL
+            {date_condition} {direction_condition}
+            ORDER BY close_date DESC
+            LIMIT 20
+        ''')
+        
+        recent_trades = []
+        for row in cursor.fetchall():
+            result_type = 'win' if row['result'] == 'TARGET' else 'loss'
+            rr = row['final_risk_reward'] or row['initial_risk_reward'] or 0
+            profit_r = f"+{rr:.1f} R" if result_type == 'win' else "-1.0 R"
+            
+            recent_trades.append({
+                'id': row['rowid'],
+                'asset': row['pair'],
+                'type': row['direction'] or 'LONG',
+                'strategy': row['trade_type'] or 'Standard',
+                'entry': row['entry_price'] or 0,
+                'result': result_type,
+                'profit': profit_r,
+                'entryDate': row['entry_date'],
+                'closeDate': row['close_date']
+            })
+        
+        # ========== PAIR PERFORMANCE ==========
+        cursor.execute(f'''
+            SELECT pair, 
+                   COUNT(*) as total,
+                   SUM(CASE WHEN UPPER(result) = 'TARGET' THEN 1 ELSE 0 END) as wins
+            FROM trades 
+            WHERE UPPER(status) = 'CLOSED' AND result IS NOT NULL
+            {date_condition} {direction_condition}
+            GROUP BY pair
+            ORDER BY total DESC
+            LIMIT 10
+        ''')
+        
+        pair_performance = []
+        for row in cursor.fetchall():
+            total = row['total']
+            wins_pair = row['wins']
+            win_rate_pair = (wins_pair / total * 100) if total > 0 else 0
+            
+            pair_performance.append({
+                'pair': row['pair'],
+                'total': total,
+                'wins': wins_pair,
+                'winRate': round(win_rate_pair, 1),
+                'color': 'primary' if win_rate_pair >= 50 else 'rose'
+            })
+        
+        # ========== EQUITY CURVE (all closed trades, cumulative P/L) ==========
+        # Date format in DB is MM.DD.YYYY HH:MM:SS, so we extract and convert
+        # Get the last 30 unique days in ascending order for proper cumulative calculation
+        cursor.execute('''
+            SELECT day, daily_pl FROM (
+                SELECT 
+                    SUBSTR(close_date, 7, 4) || '-' || SUBSTR(close_date, 1, 2) || '-' || SUBSTR(close_date, 4, 2) as day,
+                    SUM(CASE WHEN UPPER(result) = 'TARGET' THEN initial_risk_reward ELSE -1 END) as daily_pl
+                FROM trades 
+                WHERE UPPER(status) = 'CLOSED' AND result IS NOT NULL
+                  AND close_date IS NOT NULL AND close_date != ''
+                GROUP BY day
+                ORDER BY day DESC
+                LIMIT 30
+            ) ORDER BY day ASC
+        ''')
+        
+        equity_curve = []
+        cumulative = 0
+        for row in cursor.fetchall():
+            cumulative += row['daily_pl'] or 0
+            equity_curve.append({
+                'date': row['day'],
+                'value': round(cumulative, 2)
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            'stats': {
+                'totalTrades': total_trades,
+                'wins': wins,
+                'losses': losses,
+                'winRate': round(win_rate, 1),
+                'avgRR': round(avg_rr, 2),
+                'totalProfitR': round(total_profit_r, 1)
+            },
+            'recentTrades': recent_trades,
+            'pairPerformance': pair_performance,
+            'equityCurve': equity_curve
+        })
+        
+    except sqlite3.OperationalError as e:
+        return jsonify({
+            'stats': {},
+            'recentTrades': [],
+            'pairPerformance': [],
+            'equityCurve': [],
+            'message': f'Table error: {str(e)}'
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -281,6 +562,170 @@ def get_bot_status():
         'simulationMode': os.getenv('SIMULATION_MODE', 'True') == 'True',
         'lastRun': None,
     })
+
+
+# ============================================================================
+# CONNECTION TEST ENDPOINTS
+# ============================================================================
+
+@app.route('/api/test/fxcm', methods=['POST'])
+def test_fxcm_connection():
+    """Test FXCM connection with provided or stored credentials"""
+    data = request.json or {}
+    
+    # Use provided credentials or fall back to env
+    login_id = data.get('loginId') or os.getenv('FXCM_LOGIN_ID', '')
+    password = data.get('password') or os.getenv('FXCM_PASSWORD', '')
+    url = data.get('url') or os.getenv('FXCM_URL', 'http://www.fxcorporate.com/Hosts.jsp')
+    connection = data.get('connection') or os.getenv('FXCM_CONNECTION', 'Demo')
+    
+    if not login_id or not password:
+        return jsonify({
+            'success': False,
+            'error': 'Login ID and Password are required'
+        }), 400
+    
+    try:
+        # Try to import forexconnect
+        from forexconnect import ForexConnect
+        
+        # Attempt connection
+        fx = ForexConnect()
+        fx.login(login_id, password, url, connection, None, None, None)
+        
+        # Get account info if connected
+        accounts = fx.get_table(fx.ACCOUNTS)
+        account_info = None
+        if accounts and accounts.size > 0:
+            account = accounts.get_row(0)
+            account_info = {
+                'accountId': account.account_id,
+                'balance': account.balance,
+                'equity': account.equity,
+                'usedMargin': account.used_margin,
+            }
+        
+        fx.logout()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Connection successful!',
+            'account': account_info,
+            'server': connection,
+        })
+        
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'ForexConnect library not installed. Install it with: pip install forexconnect',
+            'details': 'The forexconnect package is required to connect to FXCM.'
+        }), 500
+        
+    except Exception as e:
+        error_msg = str(e)
+        # Parse common FXCM errors
+        if 'incorrect login' in error_msg.lower() or 'authentication' in error_msg.lower():
+            return jsonify({
+                'success': False,
+                'error': 'Invalid credentials. Please check your Login ID and Password.',
+                'details': error_msg
+            }), 401
+        elif 'connection' in error_msg.lower() or 'network' in error_msg.lower():
+            return jsonify({
+                'success': False,
+                'error': 'Connection failed. Please check your internet connection and server URL.',
+                'details': error_msg
+            }), 503
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'Connection failed: {error_msg}',
+                'details': error_msg
+            }), 500
+
+
+@app.route('/api/test/slack', methods=['POST'])
+def test_slack_connection():
+    """Test Slack connection with provided or stored credentials"""
+    data = request.json or {}
+    
+    # Use provided credentials or fall back to env
+    bot_token = data.get('botToken') or os.getenv('SLACK_BOT_TOKEN', '')
+    channel = data.get('channel') or os.getenv('SLACK_CHANNEL', '')
+    
+    if not bot_token:
+        return jsonify({
+            'success': False,
+            'error': 'Slack Bot Token is required'
+        }), 400
+    
+    try:
+        from slack_sdk import WebClient
+        from slack_sdk.errors import SlackApiError
+        import ssl
+        import certifi
+        
+        # Create SSL context
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        
+        # Create client and test auth
+        client = WebClient(token=bot_token, ssl=ssl_context)
+        
+        # Test authentication
+        auth_response = client.auth_test()
+        
+        result = {
+            'success': True,
+            'message': 'Slack connection successful!',
+            'bot': {
+                'name': auth_response.get('user'),
+                'team': auth_response.get('team'),
+                'botId': auth_response.get('bot_id'),
+            }
+        }
+        
+        # Test channel access if provided
+        if channel:
+            try:
+                # Try to get channel info (remove # if present)
+                channel_name = channel.lstrip('#')
+                conversations = client.conversations_list(types="public_channel,private_channel")
+                channel_found = any(
+                    c['name'] == channel_name 
+                    for c in conversations.get('channels', [])
+                )
+                result['channel'] = {
+                    'name': channel,
+                    'accessible': channel_found
+                }
+                if not channel_found:
+                    result['warning'] = f'Channel {channel} not found or bot not invited'
+            except SlackApiError:
+                result['channel'] = {'name': channel, 'accessible': False}
+                result['warning'] = 'Could not verify channel access'
+        
+        return jsonify(result)
+        
+    except ImportError:
+        return jsonify({
+            'success': False,
+            'error': 'slack_sdk library not installed. Install it with: pip install slack_sdk'
+        }), 500
+        
+    except Exception as e:
+        error_msg = str(e)
+        if 'invalid_auth' in error_msg.lower():
+            return jsonify({
+                'success': False,
+                'error': 'Invalid Slack token. Please check your Bot Token.',
+                'details': error_msg
+            }), 401
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'Slack connection failed: {error_msg}',
+                'details': error_msg
+            }), 500
 
 
 @app.route('/api/health', methods=['GET'])
