@@ -1,0 +1,20 @@
+# Trading Bot Dependencies
+pandas>=2.0.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+slack_sdk>=3.21.0
+certifi>=2023.0.0
+
+# API Server (for React UI)
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Note: forexconnect must be installed separately
+# For macOS ARM64 (Apple Silicon):
+#   pip install forexconnect-1.6.43-cp310-cp310-macosx_11_0_arm64.whl
+# For Windows:
+#   pip install forexconnect
+
+# Note: MetaTrader5 is Windows-only
+# For Windows production:
+#   pip install MetaTrader5
