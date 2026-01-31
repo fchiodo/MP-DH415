@@ -150,10 +150,6 @@ def main():
                         print('final_zones_DLY '+str(final_zones_DLY))
                         if len(final_zones_DLY) != 0:
                             print('zone_type_DLY '+str(zone_type_DLY))
-                            # Log zone detected
-                            zone_idx = final_zones_DLY[-1] if final_zones_DLY else 0
-                            if zone_idx < len(zones_rectY1_DLY):
-                                log_zone_detected(str_instrument, f'D1 {zone_type_DLY}', zones_rectY1_DLY[zone_idx])
                             
                         if len(final_zones_DLY) == 0:
                             continue
@@ -174,7 +170,8 @@ def main():
                                 break
 
                         
-                        if DLY_valid_zone: 
+                        if DLY_valid_zone:
+                            log_zone_detected(str_instrument, f'D1 {zone_type_DLY}', zones_rectY1_DLY[dly_zone])
                             add_activity_log('INFO', f'{str_instrument}: Valid D1 {zone_type_DLY} zone - checking H4...', pair=str_instrument)
                             watchlist.append(':ballot_box_with_check: In attesa della zona H4 su: '+str_instrument)
                             #search in H4 timeframe
@@ -201,6 +198,7 @@ def main():
                                 print('H4_valid_zone '+str(H4_valid_zone))
                                 if H4_valid_zone:
                                     found_valid_h4_zone = True
+                                    log_zone_detected(str_instrument, f'H4 {zone_type_H4}', zones_rectY1_H4[h4_zone])
                                     add_activity_log('INFO', f'{str_instrument}: Valid H4 {zone_type_H4} zone - searching M15 pattern...', pair=str_instrument)
                                     watchlist.append(':ballot_box_with_check: In attesa di un pattern: '+str_instrument)
                                     
@@ -215,15 +213,18 @@ def main():
                                         trade_closed = check_in_closed_trade(str_instrument, pattern_rectX1)
                                         if trade_closed:
                                             print('pattern already evaluated')
+                                            add_activity_log('WARNING', f'{str_instrument}: Pattern already evaluated - skipping', pair=str_instrument)
                                             break
 
                                         if enddate is not None and pattern_rectX1 < enddate:
                                             print('the pattern preceding a just-closed trade')
+                                            add_activity_log('WARNING', f'{str_instrument}: Pattern precedes a just-closed trade - skipping', pair=str_instrument)
                                             break
                                         
                                         result = get_closed_trades_after_date(str_instrument, pattern_rectX1)
                                         if result:
                                             print('the pattern preceding a closed trade')
+                                            add_activity_log('WARNING', f'{str_instrument}: Pattern precedes a closed trade - skipping', pair=str_instrument)
                                             break
 
 
@@ -381,6 +382,7 @@ def main():
                                 
                                 if H4_valid_zone:
                                     found_valid_h4_zone = True
+                                    log_zone_detected(str_instrument, f'H4 {zone_type_H4}', zones_rectY1_H4[h4_zone])
                                     add_activity_log('INFO', f'{str_instrument}: Valid H4 {zone_type_H4} zone - searching M15 pattern...', pair=str_instrument)
                                     watchlist.append(':ballot_box_with_check: In attesa di un pattern: '+str_instrument)
 
@@ -395,15 +397,18 @@ def main():
                                         trade_closed = check_in_closed_trade(str_instrument, pattern_rectX1)
                                         if trade_closed:
                                             print('pattern already evaluated')
+                                            add_activity_log('WARNING', f'{str_instrument}: Pattern already evaluated - skipping', pair=str_instrument)
                                             break
 
                                         if enddate is not None and pattern_rectX1 < enddate:
                                             print('the pattern preceding a just-closed trade')
+                                            add_activity_log('WARNING', f'{str_instrument}: Pattern precedes a just-closed trade - skipping', pair=str_instrument)
                                             break
 
                                         result = get_closed_trades_after_date(str_instrument, pattern_rectX1)
                                         if result:
                                             print('the pattern preceding a closed trade')
+                                            add_activity_log('WARNING', f'{str_instrument}: Pattern precedes a closed trade - skipping', pair=str_instrument)
                                             break
                                            
                                         watchlist.append(':ballot_box_with_check: In attesa rottura pattern: '+str_instrument)

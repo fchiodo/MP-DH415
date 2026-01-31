@@ -1,16 +1,29 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useApp } from '../../context/AppContext'
 
 function Header({ title, subtitle }) {
   const { botStatus, startBot, stopBot, isDarkMode, toggleTheme, toggleSidebar, isSidebarOpen } = useApp()
   const [isStarting, setIsStarting] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
+
+  // Reset isStopping when bot actually stops
+  useEffect(() => {
+    if (botStatus === 'stopped' && isStopping) {
+      setIsStopping(false)
+    }
+  }, [botStatus, isStopping])
 
   const handleStart = async () => {
     if (isStarting || botStatus === 'running') return
     setIsStarting(true)
     await startBot()
-    // Keep disabled for a moment to prevent double clicks
     setTimeout(() => setIsStarting(false), 1000)
+  }
+
+  const handleStop = async () => {
+    if (isStopping || botStatus === 'stopped') return
+    setIsStopping(true)
+    await stopBot()
   }
 
   return (
@@ -88,11 +101,17 @@ function Header({ title, subtitle }) {
             <span>{botStatus === 'running' ? 'Running' : isStarting ? 'Starting...' : 'Start'}</span>
           </button>
           <button
-            onClick={stopBot}
-            disabled={botStatus === 'stopped'}
-            className="flex items-center justify-center rounded-lg h-10 w-10 bg-slate-100 dark:bg-[#233648] text-slate-600 dark:text-white hover:bg-red-500/10 hover:text-red-500 transition-all disabled:opacity-50 disabled:hover:bg-slate-100 disabled:hover:text-slate-600 dark:disabled:hover:bg-[#233648] dark:disabled:hover:text-white"
+            onClick={handleStop}
+            disabled={isStopping || botStatus === 'stopped'}
+            className={`flex items-center justify-center rounded-lg h-10 w-10 transition-all ${
+              isStopping 
+                ? 'bg-red-500/20 text-red-500 cursor-wait'
+                : 'bg-slate-100 dark:bg-[#233648] text-slate-600 dark:text-white hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50 disabled:hover:bg-slate-100 disabled:hover:text-slate-600 dark:disabled:hover:bg-[#233648] dark:disabled:hover:text-white'
+            }`}
           >
-            <span className="material-symbols-outlined text-[18px]">stop</span>
+            <span className={`material-symbols-outlined text-[18px] ${isStopping ? 'animate-spin' : ''}`}>
+              {isStopping ? 'progress_activity' : 'stop'}
+            </span>
           </button>
         </div>
       </div>

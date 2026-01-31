@@ -78,6 +78,7 @@ def run_martina_for_pair(pair):
         '-u', url,
         '-c', connection,
         '-i', pair,
+        '-session', 'Trade',  # Required for trading logic
         '--from-runner'  # Skip redundant startup logs
     ]
     
