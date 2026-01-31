@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.whl
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Environment variables - IMPORTANT: contains secrets
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Logs
+*.log
+logs/
+martina.py.log
+
+# Database files (local development)
+*.db
+*.sqlite
+*.sqlite3
+
+# Historical data (too large)
+History/
+
+# Node.js (React UI)
+trading-bot-ui/node_modules/
+trading-bot-ui/dist/
+trading-bot-ui/.env
+trading-bot-ui/.env.local
+
+# PyInstaller
+*.spec
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Windows batch files
+*.bat
