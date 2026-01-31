@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Background rounded square -->
+  <rect x="4" y="4" width="40" height="40" rx="10" ry="10" fill="#4f8ff7"/>
+  <!-- Chart icon - simplified query_stats style -->
+  <path d="M12 32 L18 24 L24 28 L32 16 L36 20" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="36" cy="20" r="2.5" fill="white"/>
+</svg>

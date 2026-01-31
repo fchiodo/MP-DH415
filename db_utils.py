@@ -238,6 +238,242 @@ def mark_signal_processed(signal_id):
     conn.commit()
     conn.close()
 
+
+# ============================================================================
+# ACTIVITY LOG SYSTEM - Real-time logging for UI
+# ============================================================================
+
+def initialize_activity_logs_db():
+    """
+    Inizializza la tabella activity_logs per il sistema di logging in tempo reale.
+    """
+    conn = sqlite3.connect('my_database.db')
+    c = conn.cursor()
+    
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS activity_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            pair TEXT,
+            details TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Crea indice per query veloci sui log recenti
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_activity_logs_timestamp 
+        ON activity_logs(timestamp DESC)
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("[DB] Activity logs table initialized")
+
+
+def add_activity_log(log_type, message, pair=None, details=None):
+    """
+    Aggiunge un log all'activity log.
+    
+    Args:
+        log_type: 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'SYSTEM', 'TRADE', 'SIGNAL'
+        message: Il messaggio del log
+        pair: Coppia forex opzionale (es. 'EUR/USD')
+        details: Dettagli aggiuntivi opzionali (JSON string)
+    """
+    conn = sqlite3.connect('my_database.db')
+    c = conn.cursor()
+    
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    c.execute('''
+        INSERT INTO activity_logs (timestamp, type, message, pair, details)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (timestamp, log_type, message, pair, details))
+    
+    conn.commit()
+    log_id = c.lastrowid
+    conn.close()
+    
+    # Stampa anche su console per debug
+    print(f"[{log_type}] {message}")
+    
+    return log_id
+
+
+def get_recent_logs(limit=100):
+    """
+    Recupera i log più recenti.
+    """
+    conn = sqlite3.connect('my_database.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    
+    c.execute('''
+        SELECT id, timestamp, type, message, pair, details
+        FROM activity_logs
+        ORDER BY id DESC
+        LIMIT ?
+    ''', (limit,))
+    
+    logs = [dict(row) for row in c.fetchall()]
+    conn.close()
+    
+    return logs
+
+
+def get_logs_after_id(last_id):
+    """
+    Recupera i log con ID maggiore di last_id (per SSE streaming).
+    """
+    conn = sqlite3.connect('my_database.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    
+    c.execute('''
+        SELECT id, timestamp, type, message, pair, details
+        FROM activity_logs
+        WHERE id > ?
+        ORDER BY id ASC
+    ''', (last_id,))
+    
+    logs = [dict(row) for row in c.fetchall()]
+    conn.close()
+    
+    return logs
+
+
+def clear_activity_logs():
+    """
+    Pulisce tutti i log (opzionale, per manutenzione).
+    """
+    conn = sqlite3.connect('my_database.db')
+    c = conn.cursor()
+    
+    c.execute('DELETE FROM activity_logs')
+    
+    conn.commit()
+    conn.close()
+    print("[DB] Activity logs cleared")
+
+
+def get_latest_log_id():
+    """
+    Ottiene l'ID dell'ultimo log (per inizializzare SSE).
+    """
+    conn = sqlite3.connect('my_database.db')
+    c = conn.cursor()
+    
+    c.execute('SELECT MAX(id) FROM activity_logs')
+    result = c.fetchone()[0]
+    
+    conn.close()
+    return result or 0
+
+
+# ============================================================================
+# LOGGING HELPER FUNCTIONS - Per uso nel bot
+# ============================================================================
+
+def log_bot_start(mode='SIMULATION'):
+    """Log avvio bot"""
+    add_activity_log('SYSTEM', f'Trading bot starting in {mode} mode...')
+    add_activity_log('INFO', 'Initializing FXCM API connection...')
+
+
+def log_bot_stop():
+    """Log stop bot"""
+    add_activity_log('WARNING', 'Stop signal received...')
+    add_activity_log('INFO', 'Closing open connections...')
+    add_activity_log('SYSTEM', 'Trading bot stopped successfully')
+
+
+def log_pair_scan(pair, timeframe='M15'):
+    """Log scansione pair"""
+    add_activity_log('INFO', f'Scanning {pair} for entry signals on {timeframe} timeframe...', pair=pair)
+
+
+def log_zone_detected(pair, zone_type, price_level):
+    """Log zona rilevata"""
+    add_activity_log('INFO', f'{pair}: {zone_type} zone detected at {price_level:.5f}', pair=pair)
+
+
+def log_pattern_detected(pair, pattern_type, timeframe):
+    """Log pattern rilevato"""
+    add_activity_log('SUCCESS', f'{pair}: {pattern_type} pattern detected on {timeframe}', pair=pair)
+
+
+def log_trade_signal(pair, direction, entry_price, stop_loss, target, rr):
+    """Log segnale di trade"""
+    import json
+    details = json.dumps({
+        'entry': entry_price,
+        'sl': stop_loss,
+        'tp': target,
+        'rr': rr
+    })
+    add_activity_log('SIGNAL', f'{pair}: {direction} signal at {entry_price:.5f} (R:R {rr:.1f})', pair=pair, details=details)
+
+
+def log_trade_opened(pair, direction, entry_price, volume):
+    """Log trade aperto"""
+    import json
+    details = json.dumps({
+        'entry': entry_price,
+        'volume': volume
+    })
+    add_activity_log('TRADE', f'{pair}: {direction} position opened at {entry_price:.5f} (Vol: {volume})', pair=pair, details=details)
+
+
+def log_trade_closed(pair, result, profit_r):
+    """Log trade chiuso"""
+    log_type = 'SUCCESS' if result == 'TARGET' else 'WARNING'
+    add_activity_log(log_type, f'{pair}: Position closed - {result} ({profit_r:+.1f} R)', pair=pair)
+
+
+def log_sl_updated(pair, old_sl, new_sl):
+    """Log aggiornamento stop loss"""
+    add_activity_log('INFO', f'{pair}: Stop loss updated from {old_sl:.5f} to {new_sl:.5f}', pair=pair)
+
+
+def log_tp_updated(pair, old_tp, new_tp):
+    """Log aggiornamento take profit"""
+    add_activity_log('INFO', f'{pair}: Take profit updated to {new_tp:.5f}', pair=pair)
+
+
+def log_retest_waiting(pair, entry_level):
+    """Log attesa retest"""
+    add_activity_log('INFO', f'{pair}: Waiting for retest at {entry_level:.5f}', pair=pair)
+
+
+def log_rr_rejected(pair, rr, min_rr):
+    """Log R:R insufficiente"""
+    add_activity_log('WARNING', f'{pair}: Risk/Reward below minimum threshold ({rr:.1f} < {min_rr})', pair=pair)
+
+
+def log_kijun_alignment(pair, timeframe, aligned):
+    """Log allineamento Kijun"""
+    status = 'aligned' if aligned else 'not aligned'
+    add_activity_log('INFO', f'{pair}: Kijun-sen {status} on {timeframe}', pair=pair)
+
+
+def log_api_connection(status, api_name='FXCM'):
+    """Log connessione API"""
+    if status == 'connected':
+        add_activity_log('SUCCESS', f'Connected to {api_name} API successfully')
+    elif status == 'disconnected':
+        add_activity_log('WARNING', f'Disconnected from {api_name} API')
+    else:
+        add_activity_log('ERROR', f'Failed to connect to {api_name} API: {status}')
+
+
+def log_heartbeat():
+    """Log heartbeat"""
+    add_activity_log('SYSTEM', 'Heartbeat: Connection to FXCM API stable')
+
+
 def check_in_progress_trade(pair):
     conn = sqlite3.connect('my_database.db')
     # Set the row_factory attribute to sqlite3.Row

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useApp } from '../context/AppContext'
 import StatsCard from '../components/common/StatsCard'
 import PairsTable from '../components/dashboard/PairsTable'
@@ -12,6 +13,22 @@ function Dashboard() {
     clearLogs,
     stats 
   } = useApp()
+
+  const [isLogExpanded, setIsLogExpanded] = useState(false)
+
+  // Fullscreen mode - only show Activity Log
+  if (isLogExpanded) {
+    return (
+      <div className="flex flex-col h-[calc(100vh-120px)]">
+        <ActivityLog 
+          logs={activityLogs} 
+          onClear={clearLogs}
+          isExpanded={true}
+          onToggleExpand={() => setIsLogExpanded(false)}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -57,7 +74,12 @@ function Dashboard() {
       <PairsTable trades={activeTrades} isLoading={isLoadingTrades} />
 
       {/* Activity Log */}
-      <ActivityLog logs={activityLogs} onClear={clearLogs} />
+      <ActivityLog 
+        logs={activityLogs} 
+        onClear={clearLogs}
+        isExpanded={false}
+        onToggleExpand={() => setIsLogExpanded(true)}
+      />
     </div>
   )
 }

@@ -5,7 +5,17 @@ import os
 
 from forexconnect import ForexConnect, fxcorepy
 from datetime import datetime, timedelta, time
-from db_utils import check_in_retest_trade, check_in_progress_trade, get_stop_loss, check_in_closed_trade, remove_closed_trades, update_trade_in_progress, upsert_order_waiting_retest, close_trade_in_retest, get_closed_trades_after_date, initialize_signals_db, SIMULATION_MODE
+from db_utils import (
+    check_in_retest_trade, check_in_progress_trade, get_stop_loss, 
+    check_in_closed_trade, remove_closed_trades, update_trade_in_progress, 
+    upsert_order_waiting_retest, close_trade_in_retest, get_closed_trades_after_date, 
+    initialize_signals_db, SIMULATION_MODE,
+    # Activity Log functions
+    initialize_activity_logs_db, add_activity_log, log_bot_start, log_bot_stop,
+    log_pair_scan, log_zone_detected, log_pattern_detected, log_trade_signal,
+    log_trade_opened, log_trade_closed, log_retest_waiting, log_rr_rejected,
+    log_api_connection, log_heartbeat
+)
 from utils import *
 
 def parse_args():
@@ -14,6 +24,9 @@ def parse_args():
     common_samples.add_instrument_timeframe_arguments(parser)
     common_samples.add_date_arguments(parser)
     common_samples.add_max_bars_arguments(parser)
+    # Flag to indicate script is called from bot_runner (skip redundant logs)
+    parser.add_argument('--from-runner', action='store_true',
+                        help='Called from bot_runner.py - skip startup logs')
     args = parser.parse_args()
     return args
 
@@ -34,7 +47,16 @@ def main():
     str_session = args.session
     watchlist = []
     
-    # Inizializza il database dei segnali MT5 (per modalità simulazione)
+    # Inizializza il database dei segnali MT5 e Activity Logs
+    initialize_activity_logs_db()
+    
+    # Only log startup messages if NOT called from bot_runner
+    from_runner = getattr(args, 'from_runner', False)
+    
+    if not from_runner:
+        mode = 'SIMULATION' if SIMULATION_MODE else 'LIVE'
+        log_bot_start(mode)
+    
     if SIMULATION_MODE:
         print("=" * 60)
         print("  RUNNING IN SIMULATION MODE (No MT5)")
@@ -51,10 +73,10 @@ def main():
             fx.login(str_user_id, str_password, str_url,
                      str_connection, str_session_id, str_pin,
                      common_samples.session_status_changed)
-            #fx.login(str_user_id, str_password, str_url,
-                     #str_connection, str_session_id, str_pin,
-                     #None)
 
+            # Only log connection if NOT called from bot_runner
+            if not from_runner:
+                log_api_connection('connected', 'FXCM')
             print("")
             print("Requesting a price history...")
 
@@ -116,13 +138,22 @@ def main():
                  
                 #continue_logic = False #to break the flow
                 print('continue_logic: '+str(continue_logic))
-                if continue_logic: 
+                if continue_logic:
+                    # Track if any valid zones were found during analysis
+                    found_valid_d1_zone = False
+                    found_valid_h4_zone = False
+                    found_valid_pattern = False
+                    
                     for index in range(start_session, len(history_DLY)):
         
                         zones_rectX1_DLY, zones_rectX2_DLY, zones_rectY1_DLY, zones_rectY2_DLY, final_zones_DLY, zone_type_DLY = get_zones(history_DLY, kijun_h4, index, 'DLY', str_session, None)
                         print('final_zones_DLY '+str(final_zones_DLY))
                         if len(final_zones_DLY) != 0:
                             print('zone_type_DLY '+str(zone_type_DLY))
+                            # Log zone detected
+                            zone_idx = final_zones_DLY[-1] if final_zones_DLY else 0
+                            if zone_idx < len(zones_rectY1_DLY):
+                                log_zone_detected(str_instrument, f'D1 {zone_type_DLY}', zones_rectY1_DLY[zone_idx])
                             
                         if len(final_zones_DLY) == 0:
                             continue
@@ -139,10 +170,12 @@ def main():
                             print('zones_rectY2_DLY zone: '+str(zones_rectY2_DLY[dly_zone]))
                             print('DLY_valid_zone: '+str(DLY_valid_zone))
                             if DLY_valid_zone:
+                                found_valid_d1_zone = True
                                 break
 
                         
                         if DLY_valid_zone: 
+                            add_activity_log('INFO', f'{str_instrument}: Valid D1 {zone_type_DLY} zone - checking H4...', pair=str_instrument)
                             watchlist.append(':ballot_box_with_check: In attesa della zona H4 su: '+str_instrument)
                             #search in H4 timeframe
                             print('dly candle: '+str(DLY_candle["Date"]))
@@ -167,12 +200,16 @@ def main():
                             
                                 print('H4_valid_zone '+str(H4_valid_zone))
                                 if H4_valid_zone:
+                                    found_valid_h4_zone = True
+                                    add_activity_log('INFO', f'{str_instrument}: Valid H4 {zone_type_H4} zone - searching M15 pattern...', pair=str_instrument)
                                     watchlist.append(':ballot_box_with_check: In attesa di un pattern: '+str_instrument)
                                     
                                     print('search pattern m15')
                                     pattern_rectX1, pattern_rectX2, pattern_rectY1, pattern_rectY2, lastlow = get_pattern_m15_SUP(history_m15, kijun_h4, anchor_15_min, zones_rectX2_H4[zone], zones_rectY1_H4[zone], zones_rectY2_H4[zone],str_instrument,str_session)
 
                                     if(pattern_rectX1 is not None):
+                                        found_valid_pattern = True
+                                        add_activity_log('INFO', f'{str_instrument}: M15 pattern found - analyzing entry...', pair=str_instrument)
                                         
                                         #check if the same pattern was closed 
                                         trade_closed = check_in_closed_trade(str_instrument, pattern_rectX1)
@@ -243,8 +280,16 @@ def main():
                                                     
                                                     target_1_1 = calculate_target_price_LONG(trade_setup[-1]['entry_price'], trade_setup[-1]['stop_loss_price'], 1)
                                                     upsert_order_waiting_retest(trade_setup[-1], target_1_1)
+                                                    # Log trade signal
+                                                    log_trade_signal(str_instrument, 'LONG', 
+                                                                   trade_setup[-1]['entry_price'], 
+                                                                   trade_setup[-1]['stop_loss_price'],
+                                                                   trade_setup[-1]['target'], 
+                                                                   trade_setup[-1]['risk_reward'])
+                                                    log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
                                                 else:
                                                     print('NO R:R')
+                                                    log_rr_rejected(str_instrument, 0, 2.0)
                                                     watchlist.append(':ballot_box_with_check: pattern senza R:R valido: '+str_instrument)
                                                     mt5_close_order(str_instrument) #if there was a previous order placed in retest.
                                                     close_trade_in_retest(str_instrument)
@@ -302,8 +347,16 @@ def main():
 
                                                         target_1_1 = calculate_target_price_LONG(trade_setup[-1]['entry_price'], trade_setup[-1]['stop_loss_price'], 1)
                                                         upsert_order_waiting_retest(trade_setup[-1], target_1_1)
+                                                        # Log trade signal
+                                                        log_trade_signal(str_instrument, 'LONG', 
+                                                                       trade_setup[-1]['entry_price'], 
+                                                                       trade_setup[-1]['stop_loss_price'],
+                                                                       trade_setup[-1]['target'], 
+                                                                       trade_setup[-1]['risk_reward'])
+                                                        log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
                                                     else:
                                                         print('NO R:R')
+                                                        log_rr_rejected(str_instrument, 0, 2.0)
                                                         watchlist.append(':ballot_box_with_check: pattern senza R:R valido: '+str_instrument)
                                                         mt5_close_order(str_instrument) #if there was a previous order placed in retest.
                                                         close_trade_in_retest(str_instrument)
@@ -327,12 +380,16 @@ def main():
                                     print('zones_rectY2_H4 zone: '+str(zones_rectY2_H4[h4_zone]))
                                 
                                 if H4_valid_zone:
+                                    found_valid_h4_zone = True
+                                    add_activity_log('INFO', f'{str_instrument}: Valid H4 {zone_type_H4} zone - searching M15 pattern...', pair=str_instrument)
                                     watchlist.append(':ballot_box_with_check: In attesa di un pattern: '+str_instrument)
 
                                     print('search pattern m15')
                                     pattern_rectX1, pattern_rectX2, pattern_rectY1, pattern_rectY2, lasthigh = get_pattern_m15_RES(history_m15, kijun_h4, anchor_15_min, zones_rectX2_H4[h4_zone], zones_rectY1_H4[h4_zone], zones_rectY2_H4[h4_zone],str_instrument,str_session)
                                     
                                     if(pattern_rectX1 is not None):
+                                        found_valid_pattern = True
+                                        add_activity_log('INFO', f'{str_instrument}: M15 pattern found - analyzing entry...', pair=str_instrument)
 
                                         #check if the same pattern was closed 
                                         trade_closed = check_in_closed_trade(str_instrument, pattern_rectX1)
@@ -405,8 +462,16 @@ def main():
                                                     
                                                     target_1_1 = calculate_target_price_SHORT(trade_setup[-1]['entry_price'], trade_setup[-1]['stop_loss_price'], 1)
                                                     upsert_order_waiting_retest(trade_setup[-1], target_1_1)
+                                                    # Log trade signal
+                                                    log_trade_signal(str_instrument, 'SHORT', 
+                                                                   trade_setup[-1]['entry_price'], 
+                                                                   trade_setup[-1]['stop_loss_price'],
+                                                                   trade_setup[-1]['target'], 
+                                                                   trade_setup[-1]['risk_reward'])
+                                                    log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
                                                 else:
                                                     print('NO R:R')
+                                                    log_rr_rejected(str_instrument, 0, 2.0)
                                                     watchlist.append(':ballot_box_with_check: pattern senza R:R valido: '+str_instrument)
                                                     mt5_close_order(str_instrument) #if there was a previous order placed in retest.
                                                     close_trade_in_retest(str_instrument)
@@ -462,14 +527,30 @@ def main():
                                                     
                                                         target_1_1 = calculate_target_price_SHORT(trade_setup[-1]['entry_price'], trade_setup[-1]['stop_loss_price'], 1)
                                                         upsert_order_waiting_retest(trade_setup[-1], target_1_1)
+                                                        # Log trade signal
+                                                        log_trade_signal(str_instrument, 'SHORT', 
+                                                                       trade_setup[-1]['entry_price'], 
+                                                                       trade_setup[-1]['stop_loss_price'],
+                                                                       trade_setup[-1]['target'], 
+                                                                       trade_setup[-1]['risk_reward'])
+                                                        log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
 
                                                     else:
                                                         print('NO R:R')
+                                                        log_rr_rejected(str_instrument, 0, 2.0)
                                                         watchlist.append(':ballot_box_with_check: pattern senza R:R valido: '+str_instrument)
                                                         mt5_close_order(str_instrument) #if there was a previous order placed in retest.
                                                         close_trade_in_retest(str_instrument)
                                                         break
                                                     ###################
+                    
+                    # Log summary if no valid zones/patterns found
+                    if not found_valid_d1_zone:
+                        add_activity_log('INFO', f'{str_instrument}: No valid D1 zones found', pair=str_instrument)
+                    elif not found_valid_h4_zone:
+                        add_activity_log('INFO', f'{str_instrument}: D1 zone found, but no valid H4 confirmation', pair=str_instrument)
+                    elif not found_valid_pattern:
+                        add_activity_log('INFO', f'{str_instrument}: D1+H4 zones found, but no M15 pattern', pair=str_instrument)
                                         
                     ######## process trade in progress ########
                     trade_in_progress = check_in_progress_trade(str_instrument)

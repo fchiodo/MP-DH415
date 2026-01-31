@@ -1,13 +1,16 @@
 """
 Trading Bot API Server
 Provides REST endpoints for the React UI to interact with the bot configuration and data.
+Includes Server-Sent Events (SSE) for real-time Activity Log streaming.
 """
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 from dotenv import load_dotenv, set_key
 import os
 import sqlite3
+import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -553,15 +556,182 @@ def clear_signals():
 # BOT CONTROL ENDPOINTS
 # ============================================================================
 
+import subprocess
+import signal
+
+# Global variable to track bot process
+bot_process = None
+bot_start_time = None
+
 @app.route('/api/bot/status', methods=['GET'])
 def get_bot_status():
     """Get current bot status"""
-    # TODO: Implement actual bot status check
+    global bot_process, bot_start_time
+    
+    is_running = bot_process is not None and bot_process.poll() is None
+    
     return jsonify({
-        'status': 'stopped',
+        'status': 'running' if is_running else 'stopped',
+        'pid': bot_process.pid if is_running else None,
         'simulationMode': os.getenv('SIMULATION_MODE', 'True') == 'True',
-        'lastRun': None,
+        'startTime': bot_start_time.isoformat() if bot_start_time and is_running else None,
     })
+
+
+@app.route('/api/bot/start', methods=['POST'])
+def start_bot():
+    """Start the trading bot"""
+    global bot_process, bot_start_time
+    
+    # Check if bot is already running
+    if bot_process is not None and bot_process.poll() is None:
+        return jsonify({
+            'success': False,
+            'error': 'Bot is already running',
+            'pid': bot_process.pid
+        }), 400
+    
+    # Get configuration from request or env
+    data = request.json or {}
+    pair = data.get('pair', os.getenv('ACTIVE_PAIRS', 'EUR/USD').split(',')[0])
+    
+    # Get FXCM credentials
+    login_id = os.getenv('FXCM_LOGIN_ID', '')
+    password = os.getenv('FXCM_PASSWORD', '')
+    url = os.getenv('FXCM_URL', 'http://www.fxcorporate.com/Hosts.jsp')
+    connection = os.getenv('FXCM_CONNECTION', 'Demo')
+    
+    if not login_id or not password:
+        return jsonify({
+            'success': False,
+            'error': 'FXCM credentials not configured'
+        }), 400
+    
+    # Build command - use bot_runner.py for continuous scanning
+    bot_script = Path(__file__).resolve().parent.parent.parent / 'bot_runner.py'
+    python_path = '/opt/homebrew/bin/python3.10'
+    
+    # Get scan interval from request or default to 60 seconds
+    interval = data.get('interval', 60)
+    
+    cmd = [
+        python_path,
+        str(bot_script),
+        '--interval', str(interval)
+    ]
+    
+    # Add specific pairs if provided
+    if data.get('pairs'):
+        cmd.extend(['--pairs', data.get('pairs')])
+    
+    try:
+        # Add activity log
+        conn = get_activity_logs_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS activity_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    pair TEXT,
+                    details TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute('''
+                INSERT INTO activity_logs (timestamp, type, message, pair)
+                VALUES (?, ?, ?, ?)
+            ''', (timestamp, 'SYSTEM', f'Starting bot for {pair}...', pair))
+            conn.commit()
+            conn.close()
+        
+        # Start bot process
+        bot_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=str(bot_script.parent),
+            text=True,
+            bufsize=1
+        )
+        bot_start_time = datetime.now()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Bot started for {pair}',
+            'pid': bot_process.pid
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/bot/stop', methods=['POST'])
+def stop_bot():
+    """Stop the trading bot"""
+    global bot_process, bot_start_time
+    
+    if bot_process is None or bot_process.poll() is not None:
+        return jsonify({
+            'success': False,
+            'error': 'Bot is not running'
+        }), 400
+    
+    try:
+        # Add activity log
+        conn = get_activity_logs_connection()
+        if conn:
+            cursor = conn.cursor()
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute('''
+                INSERT INTO activity_logs (timestamp, type, message)
+                VALUES (?, ?, ?)
+            ''', (timestamp, 'WARNING', 'Stop signal received...'))
+            conn.commit()
+            conn.close()
+        
+        # Terminate the process
+        bot_process.terminate()
+        
+        # Wait a bit for graceful shutdown
+        try:
+            bot_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            # Force kill if it doesn't stop
+            bot_process.kill()
+            bot_process.wait()
+        
+        # Add stopped log
+        conn = get_activity_logs_connection()
+        if conn:
+            cursor = conn.cursor()
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute('''
+                INSERT INTO activity_logs (timestamp, type, message)
+                VALUES (?, ?, ?)
+            ''', (timestamp, 'SYSTEM', 'Trading bot stopped'))
+            conn.commit()
+            conn.close()
+        
+        bot_process = None
+        bot_start_time = None
+        
+        return jsonify({
+            'success': True,
+            'message': 'Bot stopped successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 # ============================================================================
@@ -737,6 +907,201 @@ def health_check():
         'database': DB_PATH.exists(),
         'envFile': ENV_PATH.exists(),
     })
+
+
+# ============================================================================
+# ACTIVITY LOG ENDPOINTS - Real-time logging via SSE
+# ============================================================================
+
+def get_activity_logs_connection():
+    """Get SQLite connection for activity logs"""
+    if not DB_PATH.exists():
+        return None
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """Get recent activity logs"""
+    conn = get_activity_logs_connection()
+    if not conn:
+        return jsonify({'logs': []})
+    
+    try:
+        cursor = conn.cursor()
+        limit = int(request.args.get('limit', 100))
+        
+        cursor.execute('''
+            SELECT id, timestamp, type, message, pair, details
+            FROM activity_logs
+            ORDER BY id DESC
+            LIMIT ?
+        ''', (limit,))
+        
+        logs = []
+        for row in cursor.fetchall():
+            logs.append({
+                'id': row['id'],
+                'timestamp': row['timestamp'],
+                'type': row['type'],
+                'message': row['message'],
+                'pair': row['pair'],
+                'details': row['details']
+            })
+        
+        conn.close()
+        return jsonify({'logs': logs})
+        
+    except sqlite3.OperationalError as e:
+        return jsonify({'logs': [], 'error': f'Table not found: {str(e)}'})
+
+
+@app.route('/api/logs/stream')
+def stream_logs():
+    """
+    Server-Sent Events (SSE) endpoint for real-time log streaming.
+    Client connects and receives new logs as they are added to the database.
+    """
+    def generate():
+        conn = get_activity_logs_connection()
+        if not conn:
+            yield f"data: {json.dumps({'error': 'Database not found'})}\n\n"
+            return
+        
+        cursor = conn.cursor()
+        
+        # Initialize with latest log ID
+        try:
+            cursor.execute('SELECT MAX(id) FROM activity_logs')
+            result = cursor.fetchone()
+            last_id = result[0] if result[0] else 0
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet
+            last_id = 0
+        
+        # Send initial connection message
+        yield f"data: {json.dumps({'type': 'connected', 'lastId': last_id})}\n\n"
+        
+        # Keep connection open and poll for new logs
+        while True:
+            try:
+                # Reconnect to get fresh data
+                conn = get_activity_logs_connection()
+                if not conn:
+                    time.sleep(1)
+                    continue
+                    
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    SELECT id, timestamp, type, message, pair, details
+                    FROM activity_logs
+                    WHERE id > ?
+                    ORDER BY id ASC
+                ''', (last_id,))
+                
+                new_logs = cursor.fetchall()
+                
+                for log in new_logs:
+                    log_data = {
+                        'id': log['id'],
+                        'timestamp': log['timestamp'],
+                        'type': log['type'],
+                        'message': log['message'],
+                        'pair': log['pair'],
+                        'details': log['details']
+                    }
+                    yield f"data: {json.dumps(log_data)}\n\n"
+                    last_id = log['id']
+                
+                conn.close()
+                
+            except sqlite3.OperationalError:
+                # Table might not exist yet, wait and retry
+                pass
+            except GeneratorExit:
+                # Client disconnected
+                break
+            
+            # Poll interval - check for new logs every 500ms
+            time.sleep(0.5)
+    
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',  # Disable nginx buffering
+            'Access-Control-Allow-Origin': '*'
+        }
+    )
+
+
+@app.route('/api/logs/clear', methods=['POST'])
+def clear_logs():
+    """Clear all activity logs"""
+    conn = get_activity_logs_connection()
+    if not conn:
+        return jsonify({'success': False, 'error': 'Database not found'})
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM activity_logs')
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'message': 'Activity logs cleared'})
+    except sqlite3.OperationalError as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/logs/add', methods=['POST'])
+def add_log():
+    """
+    Add a new activity log (for testing or external integrations).
+    Body: { type: string, message: string, pair?: string, details?: string }
+    """
+    data = request.json
+    if not data or 'type' not in data or 'message' not in data:
+        return jsonify({'success': False, 'error': 'type and message required'}), 400
+    
+    conn = get_activity_logs_connection()
+    if not conn:
+        return jsonify({'success': False, 'error': 'Database not found'})
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Ensure table exists
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                pair TEXT,
+                details TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        cursor.execute('''
+            INSERT INTO activity_logs (timestamp, type, message, pair, details)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (timestamp, data['type'], data['message'], data.get('pair'), data.get('details')))
+        
+        conn.commit()
+        log_id = cursor.lastrowid
+        conn.close()
+        
+        return jsonify({'success': True, 'id': log_id})
+        
+    except sqlite3.Error as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 
 # ============================================================================

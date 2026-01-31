@@ -135,189 +135,337 @@ def get_index_of_last_h4_candle_on_daily_date(history_H4, target_date_str, sessi
     return last_index  # Return -1 if no candle is found on the target date
 
 def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate):
-
+    """
+    Identifica zone di supporto/resistenza allineato alla logica PineScript MP-DH415 v5.8
+    
+    Modifiche rispetto alla versione precedente:
+    1. Pattern basato su confronto Close consecutivi (gap management)
+    2. Estensione fino a 7 candele consecutive
+    3. Tracking dei Kijun touch per validazione
+    4. Validazione finale che la zona non sia stata rotta
+    """
     lastclosearray = []
     zones_rectX1 = []
     zones_rectX2 = []
     zones_rectY1 = []
     zones_rectY2 = []
-    final_zones =  []
+    final_zones = []
     zone = 0
     zone_type = None
 
     dt = pd.to_datetime(history[index]["Date"])
    
     # Add one day to the datetime object to adjust the history daily error
-    if timerange == 'DLY': # and type == 'Trade' :
+    if timerange == 'DLY':
         dt = dt + timedelta(days=1)
-        #print('#### start the day: '+ str(dt))
 
     dt_str = get_last_hour(kijun_h4, dt.strftime('%Y-%m-%d %H:%M:%S'))
     
-    #print('- kijun h4 candle date: '+ str(dt_str))
-    #print('- kijun h4 candle value: '+str(kijun_h4[dt_str]))
     if type == 'BTLOG':
         print('i: '+str(index))
+    
     if dt_str in kijun_h4 and history[index]["BidClose"] < kijun_h4[dt_str]: 
-            zone_type = 'SUP'           
-            lastclosearray.clear()
-            zones_rectX1.clear()
-            zones_rectX2.clear()
-            zones_rectY1.clear()
-            zones_rectY2.clear()
+        zone_type = 'SUP'           
+        lastclosearray.clear()
+        zones_rectX1.clear()
+        zones_rectX2.clear()
+        zones_rectY1.clear()
+        zones_rectY2.clear()
 
-            rectY2 = 0
+        rectY2 = 0
+        
+        # Tracking dei Kijun touch (come nel PineScript)
+        high_kijun_touch = []
+        kijun_touch = False
 
-            zone_datetime = datetime.strptime(history[index-1]['Date'], '%m.%d.%Y %H:%M:%S')
-            zone_date = zone_datetime.date()
-            #zone_last_date = zone_date.replace(year=zone_date.year - 1)
-            try:
-                # Your existing code to manipulate zone_date
-                zone_last_date = zone_date.replace(year=zone_date.year - 1)
-            except ValueError:
-                # Check if it's a leap day
-                if zone_date.month == 2 and zone_date.day == 29:
-                    # Adjust the day for non-leap year
-                    zone_last_date = zone_date.replace(year=zone_date.year - 1, day=28)
+        zone_datetime = datetime.strptime(history[index-1]['Date'], '%m.%d.%Y %H:%M:%S')
+        zone_date = zone_datetime.date()
+        try:
+            zone_last_date = zone_date.replace(year=zone_date.year - 1)
+        except ValueError:
+            if zone_date.month == 2 and zone_date.day == 29:
+                zone_last_date = zone_date.replace(year=zone_date.year - 1, day=28)
+            else:
+                raise
+
+        for i in range(index-1, -1, -1):
+            history_date_datetime = datetime.strptime(history[i]['Date'], '%m.%d.%Y %H:%M:%S')
+            history_date_date = history_date_datetime.date()
+
+            if history_date_date < zone_last_date:
+                break
+            
+            # Ottieni il valore del Kijun per questa candela
+            candle_dt = pd.to_datetime(history[i]["Date"])
+            if timerange == 'DLY':
+                candle_dt = candle_dt + timedelta(days=1)
+            candle_dt_str = get_last_hour(kijun_h4, candle_dt.strftime('%Y-%m-%d %H:%M:%S'))
+            
+            # Check Kijun touch (come nel PineScript): high >= kijun o high[i-1] >= kijun
+            if candle_dt_str in kijun_h4:
+                kijun_value = kijun_h4[candle_dt_str]
+                high_condition = False
+                if i == index - 1:
+                    high_condition = history[i]['BidHigh'] >= kijun_value
                 else:
-                    raise  # Re-raise the original exception if it's not the leap day case
-
-            for i in range(index-1, -1, -1):
-
-                # Convert the string to a datetime object
-                history_date_datetime = datetime.strptime(history[i]['Date'], '%m.%d.%Y %H:%M:%S')
+                    high_condition = (history[i]['BidHigh'] >= kijun_value or 
+                                     history[i+1]['BidHigh'] >= kijun_value)
                 
-                # Extract just the date part from the datetime objects
-                history_date_date = history_date_datetime.date()
+                if high_condition:
+                    kijun_touch = True
+                    high_kijun_touch.append(history[i]['BidHigh'])
 
-                #print('history_date_datetime: '+str(history_date_datetime))
-                #print('dlyZoneDate_datetime: '+str(dlyZoneDate_datetime))
-
-                if history_date_date < zone_last_date:
-                    break
-
-                lastclosearray.append(history[i]['BidClose'])
+            lastclosearray.append(history[i]['BidClose'])
+            
+            # Calcolo minlow con controllo i+1 (come nel PineScript)
+            if i == index - 1:
+                minlow = history[i]['BidLow']
+            else:
                 minlow = min(history[i]['BidLow'], history[i+1]['BidLow'])
 
-                if history[i]['BidOpen'] > history[i]['BidClose'] and history[i+1]['BidOpen'] < history[i+1]['BidClose']:
+            # Pattern basato su Close consecutivi (gap management) - come nel PineScript
+            # sup_condition = close[i+1] >= close[i] and close[i] < close[i-1]
+            sup_condition = False
+            if i > 0 and i < index - 1:
+                sup_condition = (history[i+1]['BidClose'] >= history[i]['BidClose'] and 
+                                history[i]['BidClose'] < history[i-1]['BidClose'])
+            
+            if sup_condition:
+                # Estensione fino a 7 candele consecutive (come nel PineScript zone_3_candles)
+                if i >= 2 and history[i+2]['BidClose'] > history[i+1]['BidClose']:
+                    minlow = min(history[i+1]['BidLow'], history[i]['BidLow'], history[i-1]['BidLow'])
                     
-                    if history[i-1]['BidOpen'] > history[i-1]['BidClose']:
-                        minlow = min(history[i-1]['BidLow'], history[i]['BidLow'], history[i+1]['BidLow'])
+                    if i >= 3 and history[i+3]['BidClose'] > history[i+2]['BidClose']:
+                        minlow = min(history[i+2]['BidLow'], minlow)
+                        
+                        if i >= 4 and history[i+4]['BidClose'] > history[i+3]['BidClose']:
+                            minlow = min(history[i+3]['BidLow'], minlow)
+                            
+                            if i >= 5 and history[i+5]['BidClose'] > history[i+4]['BidClose']:
+                                minlow = min(history[i+4]['BidLow'], minlow)
+                                
+                                if i >= 6 and history[i+6]['BidClose'] > history[i+5]['BidClose']:
+                                    minlow = min(history[i+5]['BidLow'], minlow)
+                                    
+                                    if i >= 7 and history[i+7]['BidClose'] > history[i+6]['BidClose']:
+                                        minlow = min(history[i+6]['BidLow'], minlow)
                 
-                    if minlow < min(lastclosearray) or minlow < rectY2:
-                        rectX1 = history[i+1]["Date"] #add 1 due to an error date on history daily
+                # Validazione con Kijun touch (come nel PineScript)
+                safe_last_close = min(lastclosearray) if lastclosearray else None
+                safe_high_kijun = high_kijun_touch[0] if high_kijun_touch else None
+                
+                if safe_last_close is not None and safe_high_kijun is not None:
+                    # Condizione: minlow < min(lastclosearray) AND kijun_touch AND not single touch on current candle
+                    if (minlow < safe_last_close and kijun_touch and 
+                        not (len(high_kijun_touch) == 1 and history[i]['BidHigh'] == safe_high_kijun)):
+                        
+                        rectX1 = history[i+1]["Date"]
                         rectX2 = i
                         rectY1 = minlow
-                        rectY2 = history[i]['BidClose'] 
+                        rectY2 = history[i]['BidClose']
 
                         zones_rectX1.append(rectX1)
                         zones_rectX2.append(rectX2)
                         zones_rectY1.append(rectY1)
                         zones_rectY2.append(rectY2)
+                        
+                        # Clear lastclosearray dopo aver trovato una zona (come nel PineScript)
+                        lastclosearray.clear()
 
-            zones_rectX1.reverse()
-            zones_rectX2.reverse()
-            zones_rectY1.reverse()
-            zones_rectY2.reverse()
+        zones_rectX1.reverse()
+        zones_rectX2.reverse()
+        zones_rectY1.reverse()
+        zones_rectY2.reverse()
 
-            final_zones.clear()
-            zone = 0
-            
-            for i in range(len(zones_rectY2)):
-                #print('final_zones: '+str(final_zones))
-                #print('zone: '+str(zone))
-
-                if i == len(zones_rectY2)-1:
-                    if zone not in final_zones:
-                        final_zones.append(zone)
-                    break
-
-                if zones_rectY2[i+1] < zones_rectY1[zone]:
-                    zone = i+1
-                    while len(final_zones) > 0:
-                        z = final_zones.pop()
-                        if zones_rectY2[z] < zones_rectY1[i+1]:
-                            final_zones.append(z)
-                            zone = i+1
-                            break
-                        elif zones_rectY1[i+1] > zones_rectY2[z]:
-                            zone = i+1
-                        elif zones_rectY2[i+1] > zones_rectY2[z] and zones_rectY1[i+1] < zones_rectY1[z]:
-                            zone = z
-                            break
-                        elif zones_rectY2[i+1] > zones_rectY1[z] and zones_rectY2[i+1] < zones_rectY2[z]:
-                            zone = z
-                            break
-                        elif zones_rectY1[i+1] > zones_rectY1[z] and zones_rectY1[i+1] < zones_rectY2[z]:
-                            zone = z
-                            break
-                elif zones_rectY1[i+1] > zones_rectY2[zone]:
+        final_zones.clear()
+        zone = 0
+        
+        for i in range(len(zones_rectY2)):
+            if i == len(zones_rectY2)-1:
+                if zone not in final_zones:
                     final_zones.append(zone)
-                    zone = i+1 
+                break
+
+            if zones_rectY2[i+1] < zones_rectY1[zone]:
+                zone = i+1
+                while len(final_zones) > 0:
+                    z = final_zones.pop()
+                    if zones_rectY2[z] < zones_rectY1[i+1]:
+                        final_zones.append(z)
+                        zone = i+1
+                        break
+                    elif zones_rectY1[i+1] > zones_rectY2[z]:
+                        zone = i+1
+                    elif zones_rectY2[i+1] >= zones_rectY2[z] and zones_rectY1[i+1] <= zones_rectY1[z]:
+                        zone = z
+                        break
+                    elif zones_rectY2[i+1] <= zones_rectY2[z] and zones_rectY2[i+1] >= zones_rectY1[z]:
+                        zone = z
+                        break
+                    elif zones_rectY1[i+1] <= zones_rectY2[z] and zones_rectY1[i+1] >= zones_rectY1[z]:
+                        zone = z
+                        break
+            elif zones_rectY1[i+1] > zones_rectY2[zone]:
+                final_zones.append(zone)
+                zone = i+1
+        
+        # Validazione finale: verifica che la zona non sia stata rotta (come nel PineScript)
+        # closeLowest = min di tutti i close dalla zona ad oggi
+        if zones_rectY1 and zones_rectY2:
+            close_lowest = history[index]['BidClose']
+            zone_start_idx = zones_rectX2[zone] if zone < len(zones_rectX2) else index
+            for j in range(index, zone_start_idx, -1):
+                if j < len(history):
+                    close_lowest = min(close_lowest, history[j]['BidClose'])
+            
+            # Rimuovi zone che sono state rotte o sono sopra il Kijun
+            current_kijun = kijun_h4.get(dt_str, float('inf'))
+            valid_final_zones = []
+            for z_idx in final_zones:
+                if z_idx < len(zones_rectY1):
+                    # La zona è valida se: rectY1 <= closeLowest AND rectY1 < kijun
+                    if zones_rectY1[z_idx] <= close_lowest and zones_rectY1[z_idx] < current_kijun:
+                        valid_final_zones.append(z_idx)
+            final_zones = valid_final_zones
+                
     elif dt_str in kijun_h4 and history[index]["BidClose"] > kijun_h4[dt_str]:
-            zone_type = 'RES' 
-            zones_rectX1, zones_rectX2, zones_rectY1, zones_rectY2, final_zones = get_resistences(history, index, type, timerange, dlyZoneDate)
+        zone_type = 'RES' 
+        zones_rectX1, zones_rectX2, zones_rectY1, zones_rectY2, final_zones = get_resistences(history, index, type, timerange, dlyZoneDate, kijun_h4)
 
     return zones_rectX1, zones_rectX2, zones_rectY1, zones_rectY2, final_zones, zone_type
 
-def get_resistences(history, index, session, timerange, dlyZoneDate):
-
+def get_resistences(history, index, session, timerange, dlyZoneDate, kijun_h4=None):
+    """
+    Identifica zone di resistenza allineato alla logica PineScript MP-DH415 v5.8
+    
+    Modifiche rispetto alla versione precedente:
+    1. Pattern basato su confronto Close consecutivi (gap management)
+    2. Estensione fino a 7 candele consecutive
+    3. Tracking dei Kijun touch per validazione
+    4. Validazione finale che la zona non sia stata rotta
+    """
     lastclosearray = []
     zones_rectX1 = []
     zones_rectX2 = []
     zones_rectY1 = []
     zones_rectY2 = []
-    final_zones =  []
+    final_zones = []
     zone = 0
     rectY2 = 0
+    
+    # Tracking dei Kijun touch (come nel PineScript)
+    low_kijun_touch = []
+    kijun_touch = False
 
     zone_datetime = datetime.strptime(history[index-1]['Date'], '%m.%d.%Y %H:%M:%S')
     zone_date = zone_datetime.date()
-    #zone_last_date = zone_date.replace(year=zone_date.year - 1)
 
     try:
-        # Your existing code to manipulate zone_date
         zone_last_date = zone_date.replace(year=zone_date.year - 1)
     except ValueError:
-        # Check if it's a leap day
         if zone_date.month == 2 and zone_date.day == 29:
-            # Adjust the day for non-leap year
             zone_last_date = zone_date.replace(year=zone_date.year - 1, day=28)
         else:
-            raise  # Re-raise the original exception if it's not the leap day case
+            raise
 
     for i in range(index-1, -1, -1):
-
-        # Convert the string to a datetime object
         history_date_datetime = datetime.strptime(history[i]['Date'], '%m.%d.%Y %H:%M:%S')
-        
-        # Extract just the date part from the datetime objects
         history_date_date = history_date_datetime.date()
-
-        #print('history_date_datetime: '+str(history_date_datetime))
-        #print('dlyZoneDate_datetime: '+str(dlyZoneDate_datetime))
 
         if history_date_date < zone_last_date:
             break
+        
+        # Ottieni il valore del Kijun per questa candela
+        if kijun_h4:
+            candle_dt = pd.to_datetime(history[i]["Date"])
+            if timerange == 'DLY':
+                candle_dt = candle_dt + timedelta(days=1)
+            candle_dt_str = get_last_hour(kijun_h4, candle_dt.strftime('%Y-%m-%d %H:%M:%S'))
+            
+            # Check Kijun touch (come nel PineScript): low <= kijun o low[i-1] <= kijun
+            if candle_dt_str in kijun_h4:
+                kijun_value = kijun_h4[candle_dt_str]
+                low_condition = False
+                if i == index - 1:
+                    low_condition = history[i]['BidLow'] <= kijun_value
+                else:
+                    low_condition = (history[i]['BidLow'] <= kijun_value or 
+                                    history[i+1]['BidLow'] <= kijun_value)
+                
+                if low_condition:
+                    kijun_touch = True
+                    low_kijun_touch.append(history[i]['BidLow'])
 
         lastclosearray.append(history[i]['BidClose'])
-        maxhigh = max(history[i]['BidHigh'], history[i+1]['BidHigh'])
-
-        if history[i]['BidOpen'] < history[i]['BidClose'] and history[i+1]['BidOpen'] > history[i+1]['BidClose']:
-            
-            if history[i-1]['BidOpen'] < history[i-1]['BidClose']:
-                maxhigh = max(history[i-1]['BidHigh'], history[i]['BidHigh'], history[i+1]['BidHigh'])
         
-            if maxhigh > max(lastclosearray) or maxhigh > rectY2:
-                rectX1 = history[i+1]["Date"] #add 1 due to an error date on history daily
-                rectX2 = i
-                rectY1 = maxhigh
-                rectY2 = history[i]['BidClose'] 
+        # Calcolo maxhigh con controllo i+1 (come nel PineScript)
+        if i == index - 1:
+            maxhigh = history[i]['BidHigh']
+        else:
+            maxhigh = max(history[i]['BidHigh'], history[i+1]['BidHigh'])
 
-                zones_rectX1.append(rectX1)
-                zones_rectX2.append(rectX2)
-                zones_rectY1.append(rectY1)
-                zones_rectY2.append(rectY2)
+        # Pattern basato su Close consecutivi (gap management) - come nel PineScript
+        # res_condition = close[i+1] <= close[i] and close[i] > close[i-1]
+        res_condition = False
+        if i > 0 and i < index - 1:
+            res_condition = (history[i+1]['BidClose'] <= history[i]['BidClose'] and 
+                            history[i]['BidClose'] > history[i-1]['BidClose'])
+        
+        if res_condition:
+            # Estensione fino a 7 candele consecutive (come nel PineScript zone_3_candles)
+            if i >= 2 and history[i+2]['BidClose'] < history[i+1]['BidClose']:
+                maxhigh = max(history[i+1]['BidHigh'], history[i]['BidHigh'], history[i-1]['BidHigh'])
+                
+                if i >= 3 and history[i+3]['BidClose'] < history[i+2]['BidClose']:
+                    maxhigh = max(history[i+2]['BidHigh'], maxhigh)
+                    
+                    if i >= 4 and history[i+4]['BidClose'] < history[i+3]['BidClose']:
+                        maxhigh = max(history[i+3]['BidHigh'], maxhigh)
+                        
+                        if i >= 5 and history[i+5]['BidClose'] < history[i+4]['BidClose']:
+                            maxhigh = max(history[i+4]['BidHigh'], maxhigh)
+                            
+                            if i >= 6 and history[i+6]['BidClose'] < history[i+5]['BidClose']:
+                                maxhigh = max(history[i+5]['BidHigh'], maxhigh)
+                                
+                                if i >= 7 and history[i+7]['BidClose'] < history[i+6]['BidClose']:
+                                    maxhigh = max(history[i+6]['BidHigh'], maxhigh)
+            
+            # Validazione con Kijun touch (come nel PineScript)
+            safe_max_close = max(lastclosearray) if lastclosearray else None
+            safe_low_kijun = low_kijun_touch[0] if low_kijun_touch else None
+            
+            # Se non abbiamo kijun_h4, usa la logica originale
+            if kijun_h4 is None:
+                if maxhigh > max(lastclosearray) or maxhigh > rectY2:
+                    rectX1 = history[i+1]["Date"]
+                    rectX2 = i
+                    rectY1 = maxhigh
+                    rectY2 = history[i]['BidClose']
+
+                    zones_rectX1.append(rectX1)
+                    zones_rectX2.append(rectX2)
+                    zones_rectY1.append(rectY1)
+                    zones_rectY2.append(rectY2)
+                    
+                    lastclosearray.clear()
+            elif safe_max_close is not None and safe_low_kijun is not None:
+                # Condizione: maxhigh > max(lastclosearray) AND kijun_touch AND not single touch on current candle
+                if (maxhigh > safe_max_close and kijun_touch and 
+                    not (len(low_kijun_touch) == 1 and history[i]['BidLow'] == safe_low_kijun)):
+                    
+                    rectX1 = history[i+1]["Date"]
+                    rectX2 = i
+                    rectY1 = maxhigh
+                    rectY2 = history[i]['BidClose']
+
+                    zones_rectX1.append(rectX1)
+                    zones_rectX2.append(rectX2)
+                    zones_rectY1.append(rectY1)
+                    zones_rectY2.append(rectY2)
+                    
+                    # Clear lastclosearray dopo aver trovato una zona (come nel PineScript)
+                    lastclosearray.clear()
 
     zones_rectX1.reverse()
     zones_rectX2.reverse()
@@ -327,15 +475,10 @@ def get_resistences(history, index, session, timerange, dlyZoneDate):
     if session == 'BTLOG':
         print('zones_rectX1 before: '+str(zones_rectX1))
         input()
-    
-    
 
     final_zones.clear()
     zone = 0
     for i in range(len(zones_rectY2)):
-        #print('final_zones: '+str(final_zones))
-        #print('zone: '+str(zone))
-
         if i == len(zones_rectY2)-1:
             if zone not in final_zones:
                 final_zones.append(zone)
@@ -351,18 +494,42 @@ def get_resistences(history, index, session, timerange, dlyZoneDate):
                     break
                 elif zones_rectY1[z] < zones_rectY2[i+1]:
                     zone = i+1
-                elif zones_rectY1[i+1] > zones_rectY1[z] and zones_rectY2[i+1] < zones_rectY2[z]:
+                elif zones_rectY1[i+1] >= zones_rectY1[z] and zones_rectY2[i+1] <= zones_rectY2[z]:
                     zone = z
                     break
-                elif zones_rectY1[i+1] < zones_rectY1[z] and zones_rectY1[i+1] > zones_rectY2[z]:
+                elif zones_rectY1[i+1] <= zones_rectY1[z] and zones_rectY1[i+1] >= zones_rectY2[z]:
                     zone = z
                     break
-                elif zones_rectY2[i+1] < zones_rectY1[z] and zones_rectY2[i+1] > zones_rectY2[z]:
+                elif zones_rectY2[i+1] <= zones_rectY1[z] and zones_rectY2[i+1] >= zones_rectY2[z]:
                     zone = z
                     break
         elif zones_rectY1[i+1] < zones_rectY2[zone]:
             final_zones.append(zone)
-            zone = i+1 
+            zone = i+1
+
+    # Validazione finale: verifica che la zona non sia stata rotta (come nel PineScript)
+    if kijun_h4 and zones_rectY1 and zones_rectY2:
+        dt = pd.to_datetime(history[index]["Date"])
+        if timerange == 'DLY':
+            dt = dt + timedelta(days=1)
+        dt_str = get_last_hour(kijun_h4, dt.strftime('%Y-%m-%d %H:%M:%S'))
+        
+        # highestClose = max di tutti i close dalla zona ad oggi
+        highest_close = history[index]['BidClose']
+        zone_start_idx = zones_rectX2[zone] if zone < len(zones_rectX2) else index
+        for j in range(index, zone_start_idx, -1):
+            if j < len(history):
+                highest_close = max(highest_close, history[j]['BidClose'])
+        
+        # Rimuovi zone che sono state rotte o sono sotto il Kijun
+        current_kijun = kijun_h4.get(dt_str, 0)
+        valid_final_zones = []
+        for z_idx in final_zones:
+            if z_idx < len(zones_rectY1):
+                # La zona è valida se: rectY1 >= highestClose AND rectY1 > kijun
+                if zones_rectY1[z_idx] >= highest_close and zones_rectY1[z_idx] > current_kijun:
+                    valid_final_zones.append(z_idx)
+        final_zones = valid_final_zones
 
     if session == 'BTLOG':
         print('zones_rectX1: '+str(zones_rectX1))
