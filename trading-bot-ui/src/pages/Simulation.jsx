@@ -133,24 +133,25 @@ function Simulation() {
               <tr>
                 <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">Timestamp</th>
                 <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">Pair</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">Action</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">Price</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">Direction</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">Entry</th>
                 <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">SL</th>
                 <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">TP</th>
-                <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">Volume</th>
+                <th className="px-4 py-3 text-xs font-bold text-slate-500 dark:text-[#92adc9] uppercase tracking-wider">R:R</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-[#233648]">
               {isLoading ? (
                 <tr>
-                  <td colSpan="7" className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan="8" className="px-4 py-8 text-center text-slate-500">
                     <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
                     Loading signals...
                   </td>
                 </tr>
               ) : signals.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan="8" className="px-4 py-8 text-center text-slate-500">
                     <div className="flex flex-col items-center gap-2">
                       <span className="material-symbols-outlined text-3xl opacity-50">inbox</span>
                       <span>No pending signals</span>
@@ -159,17 +160,38 @@ function Simulation() {
                   </td>
                 </tr>
               ) : (
-                signals.map((signal) => (
-                  <tr key={signal.id} className="hover:bg-slate-50 dark:hover:bg-[#16232e] transition-colors">
-                    <td className="px-4 py-4 text-sm font-mono text-slate-500 dark:text-slate-400">{signal.timestamp}</td>
-                    <td className="px-4 py-4 text-sm font-bold text-slate-900 dark:text-white">{signal.pair || signal.symbol}</td>
-                    <td className="px-4 py-4 text-sm">{getOrderTypeBadge(signal.action || signal.order_type)}</td>
-                    <td className="px-4 py-4 text-sm font-mono text-slate-900 dark:text-white">{signal.price || '-'}</td>
-                    <td className="px-4 py-4 text-sm font-mono text-red-500">{signal.stop_loss || '-'}</td>
-                    <td className="px-4 py-4 text-sm font-mono text-green-500">{signal.take_profit || '-'}</td>
-                    <td className="px-4 py-4 text-sm font-mono text-slate-600 dark:text-slate-400">{signal.volume || '-'}</td>
-                  </tr>
-                ))
+                signals.map((signal) => {
+                  const isLong = signal.order_type?.includes('BUY')
+                  const direction = isLong ? 'LONG' : 'SHORT'
+                  // Calculate R:R from price, SL, TP
+                  const rr = signal.price && signal.stop_loss && signal.take_profit
+                    ? Math.abs((signal.take_profit - signal.price) / (signal.price - signal.stop_loss)).toFixed(2)
+                    : '-'
+                  return (
+                    <tr key={signal.id} className="hover:bg-slate-50 dark:hover:bg-[#16232e] transition-colors">
+                      <td className="px-4 py-4 text-sm font-mono text-slate-500 dark:text-slate-400">{signal.timestamp}</td>
+                      <td className="px-4 py-4 text-sm font-bold text-slate-900 dark:text-white">{signal.pair || signal.symbol}</td>
+                      <td className="px-4 py-4 text-sm">
+                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                          isLong
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400'
+                            : 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400'
+                        }`}>
+                          {direction}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 text-sm">
+                        <span className="px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400">
+                          {signal.status || signal.action || 'PENDING'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 text-sm font-mono text-slate-900 dark:text-white">{signal.price || '-'}</td>
+                      <td className="px-4 py-4 text-sm font-mono text-red-500">{signal.stop_loss || '-'}</td>
+                      <td className="px-4 py-4 text-sm font-mono text-emerald-500">{signal.take_profit || '-'}</td>
+                      <td className="px-4 py-4 text-sm font-mono font-bold text-primary">{rr}</td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>

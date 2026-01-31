@@ -288,6 +288,7 @@ def main():
                                                                    trade_setup[-1]['target'], 
                                                                    trade_setup[-1]['risk_reward'])
                                                     log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
+                                                    add_activity_log('SUCCESS', f'{str_instrument}: LONG signal created - Entry: {round(fib_78_6, 5)}, SL: {round(stop_loss_price, 5)}, R:R: {round(risk_reward, 2)}', pair=str_instrument)
                                                 else:
                                                     print('NO R:R')
                                                     log_rr_rejected(str_instrument, 0, 2.0)
@@ -355,6 +356,7 @@ def main():
                                                                        trade_setup[-1]['target'], 
                                                                        trade_setup[-1]['risk_reward'])
                                                         log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
+                                                        add_activity_log('SUCCESS', f'{str_instrument}: LONG signal updated - Entry: {round(fib_78_6, 5)}, R:R: {round(risk_reward, 2)}', pair=str_instrument)
                                                     else:
                                                         print('NO R:R')
                                                         log_rr_rejected(str_instrument, 0, 2.0)
@@ -363,6 +365,10 @@ def main():
                                                         close_trade_in_retest(str_instrument)
                                                         break
                                                     ###################
+                                        
+                                        # Log if pattern was not broken
+                                        if not pattern_breaking:
+                                            add_activity_log('INFO', f'{str_instrument}: M15 pattern not yet broken - waiting for breakout', pair=str_instrument)
                                         
                             elif zone_type_H4 == 'RES':
                                 #print('final_zones_H4: '+str(final_zones_H4))
@@ -474,6 +480,7 @@ def main():
                                                                    trade_setup[-1]['target'], 
                                                                    trade_setup[-1]['risk_reward'])
                                                     log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
+                                                    add_activity_log('SUCCESS', f'{str_instrument}: SHORT signal created - Entry: {round(fib_78_6, 5)}, SL: {round(stop_loss_price, 5)}, R:R: {round(risk_reward, 2)}', pair=str_instrument)
                                                 else:
                                                     print('NO R:R')
                                                     log_rr_rejected(str_instrument, 0, 2.0)
@@ -539,6 +546,7 @@ def main():
                                                                        trade_setup[-1]['target'], 
                                                                        trade_setup[-1]['risk_reward'])
                                                         log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
+                                                        add_activity_log('SUCCESS', f'{str_instrument}: SHORT signal updated - Entry: {round(fib_78_6, 5)}, R:R: {round(risk_reward, 2)}', pair=str_instrument)
 
                                                     else:
                                                         print('NO R:R')
@@ -548,6 +556,10 @@ def main():
                                                         close_trade_in_retest(str_instrument)
                                                         break
                                                     ###################
+                                        
+                                        # Log if pattern was not broken
+                                        if not pattern_breaking:
+                                            add_activity_log('INFO', f'{str_instrument}: M15 pattern not yet broken - waiting for breakout', pair=str_instrument)
                     
                     # Log summary if no valid zones/patterns found
                     if not found_valid_d1_zone:
