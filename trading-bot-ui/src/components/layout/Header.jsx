@@ -1,7 +1,17 @@
+import { useState } from 'react'
 import { useApp } from '../../context/AppContext'
 
 function Header({ title, subtitle }) {
   const { botStatus, startBot, stopBot, isDarkMode, toggleTheme, toggleSidebar, isSidebarOpen } = useApp()
+  const [isStarting, setIsStarting] = useState(false)
+
+  const handleStart = async () => {
+    if (isStarting || botStatus === 'running') return
+    setIsStarting(true)
+    await startBot()
+    // Keep disabled for a moment to prevent double clicks
+    setTimeout(() => setIsStarting(false), 1000)
+  }
 
   return (
     <header className="flex items-center justify-between whitespace-nowrap border-b border-solid border-slate-200 dark:border-[#233648] px-6 py-4 bg-white dark:bg-background-dark sticky top-0 z-40">
@@ -62,18 +72,20 @@ function Header({ title, subtitle }) {
         {/* Bot Controls */}
         <div className="flex gap-2">
           <button
-            onClick={startBot}
-            disabled={botStatus === 'running'}
+            onClick={handleStart}
+            disabled={isStarting || botStatus === 'running'}
             className={`flex items-center justify-center gap-2 rounded-lg h-10 px-4 text-sm font-bold transition-all ${
               botStatus === 'running'
                 ? 'bg-accent-green/20 text-accent-green cursor-default'
+                : isStarting
+                ? 'bg-primary/50 text-white cursor-wait'
                 : 'bg-primary text-white hover:bg-primary/90 shadow-lg shadow-primary/20'
             }`}
           >
             <span className="material-symbols-outlined text-[18px]">
-              {botStatus === 'running' ? 'radio_button_checked' : 'play_arrow'}
+              {botStatus === 'running' ? 'radio_button_checked' : isStarting ? 'hourglass_empty' : 'play_arrow'}
             </span>
-            <span>{botStatus === 'running' ? 'Running' : 'Start'}</span>
+            <span>{botStatus === 'running' ? 'Running' : isStarting ? 'Starting...' : 'Start'}</span>
           </button>
           <button
             onClick={stopBot}

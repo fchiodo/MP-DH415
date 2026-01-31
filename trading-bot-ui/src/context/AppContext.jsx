@@ -1,9 +1,12 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 
 const AppContext = createContext()
 
 // API URL - change this if backend runs on different port
 const API_URL = 'http://localhost:5001'
+
+// Module-level flag to prevent double-start (survives re-renders and HMR)
+let isBotStarting = false
 
 export function AppProvider({ children }) {
   // Theme management
@@ -97,15 +100,23 @@ export function AppProvider({ children }) {
   }, [botStatus, fetchTrades, fetchStats])
 
   const [botInterval, setBotInterval] = useState(null)
+  const [botTimeouts, setBotTimeouts] = useState([])
+  const isStartingRef = useRef(false) // Immediate check to prevent double-start
 
   const addLog = (type, message) => {
     const now = new Date()
     const time = now.toTimeString().slice(0, 8)
-    setActivityLogs(prev => [{ id: Date.now(), time, type, message }, ...prev])
+    setActivityLogs(prev => [{ id: Date.now() + Math.random(), time, type, message }, ...prev])
   }
 
   const clearLogs = () => {
     setActivityLogs([])
+  }
+
+  // Clear all pending timeouts
+  const clearBotTimeouts = () => {
+    botTimeouts.forEach(t => clearTimeout(t))
+    setBotTimeouts([])
   }
 
   // Simulated bot activities
@@ -128,56 +139,78 @@ export function AppProvider({ children }) {
   ]
 
   const startBot = async () => {
-    setBotStatus('running')
-    addLog('SYSTEM', 'Trading bot starting...')
+    // Triple check: module-level flag, ref, and state
+    if (isBotStarting || isStartingRef.current || botStatus === 'running') {
+      console.log('Bot already starting or running, ignoring start request')
+      return
+    }
     
-    // Simulate connection
-    setTimeout(() => {
-      addLog('SUCCESS', 'Connected to FXCM API successfully')
-      addLog('INFO', `Mode: ${isSimulationMode ? 'SIMULATION' : 'LIVE TRADING'}`)
-      addLog('INFO', 'Loading active currency pairs configuration...')
-    }, 500)
-
-    setTimeout(() => {
-      addLog('SUCCESS', 'Bot initialized. Starting market scan...')
-    }, 1500)
-
-    // Start periodic activity simulation
-    const interval = setInterval(() => {
-      const randomActivity = simulatedActivities[Math.floor(Math.random() * simulatedActivities.length)]
-      addLog(randomActivity.type, randomActivity.message)
-    }, 5000) // Every 5 seconds
-
-    setBotInterval(interval)
-  }
-
-  const stopBot = () => {
-    // Clear the interval
+    // Set both flags immediately
+    isBotStarting = true
+    isStartingRef.current = true
+    
+    // Clear any existing interval and timeouts
     if (botInterval) {
       clearInterval(botInterval)
       setBotInterval(null)
     }
+    clearBotTimeouts()
     
-    addLog('WARNING', 'Stop signal received...')
+    setBotStatus('running')
     
-    setTimeout(() => {
-      addLog('INFO', 'Closing open connections...')
-    }, 300)
+    // Add all startup logs in a SINGLE state update to prevent batching issues
+    const now = new Date()
+    const time = now.toTimeString().slice(0, 8)
+    const startupLogs = [
+      { id: Date.now() + 4, time, type: 'SUCCESS', message: 'Bot initialized. Starting market scan...' },
+      { id: Date.now() + 3, time, type: 'INFO', message: 'Loading active currency pairs configuration...' },
+      { id: Date.now() + 2, time, type: 'INFO', message: `Mode: ${isSimulationMode ? 'SIMULATION' : 'LIVE TRADING'}` },
+      { id: Date.now() + 1, time, type: 'SUCCESS', message: 'Connected to FXCM API successfully' },
+      { id: Date.now(), time, type: 'SYSTEM', message: 'Trading bot starting...' },
+    ]
+    setActivityLogs(prev => [...startupLogs, ...prev])
+
+    // Start periodic activity simulation after 3 seconds
+    const timeout = setTimeout(() => {
+      const interval = setInterval(() => {
+        const randomActivity = simulatedActivities[Math.floor(Math.random() * simulatedActivities.length)]
+        addLog(randomActivity.type, randomActivity.message)
+      }, 5000) // Every 5 seconds
+      
+      setBotInterval(interval)
+    }, 3000)
     
-    setTimeout(() => {
-      addLog('SYSTEM', 'Trading bot stopped successfully')
-      setBotStatus('stopped')
-    }, 800)
+    setBotTimeouts([timeout])
   }
 
-  // Cleanup interval on unmount
+  const stopBot = () => {
+    // Clear the interval and pending timeouts
+    if (botInterval) {
+      clearInterval(botInterval)
+      setBotInterval(null)
+    }
+    clearBotTimeouts()
+    
+    // Reset all starting flags
+    isBotStarting = false
+    isStartingRef.current = false
+    
+    // Add stop logs synchronously
+    addLog('WARNING', 'Stop signal received...')
+    addLog('INFO', 'Closing open connections...')
+    addLog('SYSTEM', 'Trading bot stopped successfully')
+    setBotStatus('stopped')
+  }
+
+  // Cleanup interval and timeouts on unmount
   useEffect(() => {
     return () => {
       if (botInterval) {
         clearInterval(botInterval)
       }
+      botTimeouts.forEach(t => clearTimeout(t))
     }
-  }, [botInterval])
+  }, [botInterval, botTimeouts])
 
   const toggleMode = () => setIsSimulationMode(!isSimulationMode)
 
