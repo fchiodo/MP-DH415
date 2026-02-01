@@ -128,6 +128,15 @@ function Settings() {
     setActivePairs(prev => ({ ...prev, [pair]: !prev[pair] }))
   }
 
+  const toggleAllPairs = () => {
+    const allSelected = Object.values(activePairs).every(Boolean)
+    const newState = {}
+    ALL_PAIRS.forEach(pair => {
+      newState[pair] = !allSelected
+    })
+    setActivePairs(newState)
+  }
+
   const handleToggle = (field) => {
     setConfig(prev => ({ ...prev, [field]: !prev[field] }))
   }
@@ -362,12 +371,23 @@ function Settings() {
 
       {/* Active Pairs Section */}
       <div className="mb-10">
-        <div className="flex items-center gap-2 px-4 pb-3 pt-5">
-          <span className="material-symbols-outlined text-primary">currency_exchange</span>
-          <h2 className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em]">Active Currency Pairs</h2>
-          <span className="ml-2 text-xs text-slate-500 dark:text-[#92adc9]">
-            ({Object.values(activePairs).filter(Boolean).length} selected)
-          </span>
+        <div className="flex items-center justify-between px-4 pb-3 pt-5">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-primary">currency_exchange</span>
+            <h2 className="text-slate-900 dark:text-white text-[22px] font-bold leading-tight tracking-[-0.015em]">Active Currency Pairs</h2>
+            <span className="ml-2 text-xs text-slate-500 dark:text-[#92adc9]">
+              ({Object.values(activePairs).filter(Boolean).length} selected)
+            </span>
+          </div>
+          <button
+            onClick={toggleAllPairs}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors"
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              {Object.values(activePairs).every(Boolean) ? 'deselect' : 'select_all'}
+            </span>
+            {Object.values(activePairs).every(Boolean) ? 'Deselect All' : 'Select All'}
+          </button>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 p-4 bg-slate-50 dark:bg-[#192633]/50 rounded-xl border border-slate-200 dark:border-[#233648]">
           {Object.entries(activePairs).map(([pair, isActive]) => (
