@@ -474,6 +474,11 @@ def log_heartbeat():
     add_activity_log('SYSTEM', 'Heartbeat: Connection to FXCM API stable')
 
 
+def log_trader(message, pair=None):
+    """Log trader debug message - for detailed trading flow"""
+    add_activity_log('TRADER', message, pair=pair)
+
+
 def check_in_progress_trade(pair):
     conn = sqlite3.connect('my_database.db')
     # Set the row_factory attribute to sqlite3.Row

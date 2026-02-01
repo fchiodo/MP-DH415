@@ -10,6 +10,7 @@ const logTypeColors = {
   ERROR: 'text-red-500',
   TRADE: 'text-emerald-400',
   SIGNAL: 'text-violet-400',
+  TRADER: 'text-fuchsia-400',
 }
 
 const logTypeIcons = {
@@ -21,18 +22,19 @@ const logTypeIcons = {
   ERROR: '✕',
   TRADE: '📈',
   SIGNAL: '🎯',
+  TRADER: '👤',
 }
 
-const LOG_TYPES = ['SYSTEM', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'TRADE', 'SIGNAL']
+const LOG_TYPES = ['SYSTEM', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'TRADE', 'SIGNAL', 'TRADER']
 
 function ActivityLog({ logs, onClear, isExpanded = false, onToggleExpand }) {
   const logContainerRef = useRef(null)
   const { sseConnected } = useApp()
   const [showFilterMenu, setShowFilterMenu] = useState(false)
   const [activeFilters, setActiveFilters] = useState(() => {
-    // All types enabled by default
+    // All types enabled by default, except TRADER (debug logs)
     const filters = {}
-    LOG_TYPES.forEach(type => filters[type] = true)
+    LOG_TYPES.forEach(type => filters[type] = type !== 'TRADER')
     return filters
   })
 

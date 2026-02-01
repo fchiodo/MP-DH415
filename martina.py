@@ -14,7 +14,7 @@ from db_utils import (
     initialize_activity_logs_db, add_activity_log, log_bot_start, log_bot_stop,
     log_pair_scan, log_zone_detected, log_pattern_detected, log_trade_signal,
     log_trade_opened, log_trade_closed, log_retest_waiting, log_rr_rejected,
-    log_api_connection, log_heartbeat
+    log_api_connection, log_heartbeat, log_trader
 )
 from utils import *
 
@@ -110,7 +110,7 @@ def main():
                 
                 trade_in_retest = check_in_retest_trade(str_instrument)
 
-                print('Trade in retest: '+str(trade_in_retest))
+                log_trader(f'Trade in retest: {trade_in_retest}', pair=str_instrument)
                 
                 if trade_in_retest is not None:
                     continue_logic = process_trade_in_retest(trade_in_retest, history_m15, kijun_h4, history_H4)
@@ -119,7 +119,7 @@ def main():
                 if continue_logic:
                     trade_in_progress = check_in_progress_trade(str_instrument)
                 
-                print('Trade in progress: '+str(trade_in_progress))
+                log_trader(f'Trade in progress: {trade_in_progress}', pair=str_instrument)
 
                 if trade_in_progress is not None:
                     trade_in_progress = dict(zip(trade_keys, trade_in_progress))
@@ -147,9 +147,9 @@ def main():
                     for index in range(start_session, len(history_DLY)):
         
                         zones_rectX1_DLY, zones_rectX2_DLY, zones_rectY1_DLY, zones_rectY2_DLY, final_zones_DLY, zone_type_DLY = get_zones(history_DLY, kijun_h4, index, 'DLY', str_session, None)
-                        print('final_zones_DLY '+str(final_zones_DLY))
+                        log_trader(f'final_zones_DLY: {final_zones_DLY}', pair=str_instrument)
                         if len(final_zones_DLY) != 0:
-                            print('zone_type_DLY '+str(zone_type_DLY))
+                            log_trader(f'zone_type_DLY: {zone_type_DLY}', pair=str_instrument)
                             
                         if len(final_zones_DLY) == 0:
                             continue
@@ -161,10 +161,8 @@ def main():
                                 DLY_candle, DLY_zone_valid_for_kijun, DLY_valid_zone, anchor = validate_resistence(zones_rectX1_DLY[zone], zones_rectX2_DLY[zone], zones_rectY1_DLY[zone], zones_rectY2_DLY[zone], history_DLY, 'DLY', kijun_h4, str_instrument, 'Trade')
                             
                             dly_zone = zone
-                            print('zones_rectX1_DLY zone: '+str(zones_rectX1_DLY[dly_zone]))
-                            print('zones_rectY1_DLY zone: '+str(zones_rectY1_DLY[dly_zone]))
-                            print('zones_rectY2_DLY zone: '+str(zones_rectY2_DLY[dly_zone]))
-                            print('DLY_valid_zone: '+str(DLY_valid_zone))
+                            log_trader(f'DLY zone X1: {zones_rectX1_DLY[dly_zone]}, Y1: {zones_rectY1_DLY[dly_zone]}, Y2: {zones_rectY2_DLY[dly_zone]}', pair=str_instrument)
+                            log_trader(f'DLY_valid_zone: {DLY_valid_zone}', pair=str_instrument)
                             if DLY_valid_zone:
                                 found_valid_d1_zone = True
                                 break
@@ -191,18 +189,16 @@ def main():
                                         if H4_valid_zone:
                                             break
                                 if len(zones_rectX1_H4) != 0:
-                                    print('zones_rectX1_H4 zone: '+str(zones_rectX1_H4[h4_zone]))
-                                    print('zones_rectY1_H4 zone: '+str(zones_rectY1_H4[h4_zone]))
-                                    print('zones_rectY2_H4 zone: '+str(zones_rectY2_H4[h4_zone]))
+                                    log_trader(f'H4 zone X1: {zones_rectX1_H4[h4_zone]}, Y1: {zones_rectY1_H4[h4_zone]}, Y2: {zones_rectY2_H4[h4_zone]}', pair=str_instrument)
                             
-                                print('H4_valid_zone '+str(H4_valid_zone))
+                                log_trader(f'H4_valid_zone: {H4_valid_zone}', pair=str_instrument)
                                 if H4_valid_zone:
                                     found_valid_h4_zone = True
                                     log_zone_detected(str_instrument, f'H4 {zone_type_H4}', zones_rectY1_H4[h4_zone])
                                     add_activity_log('INFO', f'{str_instrument}: Valid H4 {zone_type_H4} zone - searching M15 pattern...', pair=str_instrument)
                                     watchlist.append(':ballot_box_with_check: In attesa di un pattern: '+str_instrument)
                                     
-                                    print('search pattern m15')
+                                    log_trader('Searching M15 pattern', pair=str_instrument)
                                     pattern_rectX1, pattern_rectX2, pattern_rectY1, pattern_rectY2, lastlow = get_pattern_m15_SUP(history_m15, kijun_h4, anchor_15_min, zones_rectX2_H4[zone], zones_rectY1_H4[zone], zones_rectY2_H4[zone],str_instrument,str_session)
 
                                     if(pattern_rectX1 is not None):
@@ -230,10 +226,7 @@ def main():
 
                                         watchlist.append(':ballot_box_with_check: In attesa rottura pattern: '+str_instrument)
 
-                                        print('pattern_rectX1: '+str(pattern_rectX1))
-                                        print('pattern_rectX2: '+str(pattern_rectX2))
-                                        print('pattern_rectY1: '+str(pattern_rectY1))
-                                        print('pattern_rectY2: '+str(pattern_rectY2))
+                                        log_trader(f'Pattern: X1={pattern_rectX1}, X2={pattern_rectX2}, Y1={pattern_rectY1}, Y2={pattern_rectY2}', pair=str_instrument)
 
                                         #start of the analysis to open a position
                                         pattern_breaking = False
@@ -252,9 +245,7 @@ def main():
                                                 pattern_breaking_candle_high = history_m15[index]['BidHigh']
                                                 fib_78_6 = fibonacci_78_6(lastlow, pattern_breaking_candle_high)
 
-                                                print('fib_78_6: '+str(fib_78_6))
-                                                print('lastlow: '+str(lastlow))
-                                                print('pattern_breaking_candle_high: '+str(pattern_breaking_candle_high))
+                                                log_trader(f'Fib 78.6: {fib_78_6}, lastlow: {lastlow}, candle_high: {pattern_breaking_candle_high}', pair=str_instrument)
                                                 ###################
                                                 stop_loss_price = calculate_stop_loss_LONG(str_instrument,pattern_rectY1, lastlow)
                                                 target_price = get_nearest_lower_kijun_h4(history_m15[index], kijun_h4)
@@ -305,8 +296,8 @@ def main():
 
                                                 watchlist.append(':ballot_box_with_check: A mercato: '+str_instrument)
 
-                                                print('data della rottura del livello di fibonacci: '+str(history_m15[index]['Date']))
-                                                print('signal: '+str(trade_setup[-1]))
+                                                log_trader(f'Fibonacci level broken at: {history_m15[index]["Date"]}', pair=str_instrument)
+                                                log_trader(f'Signal: {trade_setup[-1]}', pair=str_instrument)
                                                 update_trade_in_progress(trade_setup[-1]['pair'], index, history_m15[index]['Date'])
                                                 break
 
@@ -380,11 +371,8 @@ def main():
                                         if H4_valid_zone:
                                             break
 
-                                #print('h4_zone: '+str(h4_zone))
                                 if len(zones_rectX1_H4) != 0:
-                                    print('zones_rectX1_H4 zone: '+str(zones_rectX1_H4[h4_zone]))
-                                    print('zones_rectY1_H4 zone: '+str(zones_rectY1_H4[h4_zone]))
-                                    print('zones_rectY2_H4 zone: '+str(zones_rectY2_H4[h4_zone]))
+                                    log_trader(f'H4 zone X1: {zones_rectX1_H4[h4_zone]}, Y1: {zones_rectY1_H4[h4_zone]}, Y2: {zones_rectY2_H4[h4_zone]}', pair=str_instrument)
                                 
                                 if H4_valid_zone:
                                     found_valid_h4_zone = True
@@ -392,7 +380,7 @@ def main():
                                     add_activity_log('INFO', f'{str_instrument}: Valid H4 {zone_type_H4} zone - searching M15 pattern...', pair=str_instrument)
                                     watchlist.append(':ballot_box_with_check: In attesa di un pattern: '+str_instrument)
 
-                                    print('search pattern m15')
+                                    log_trader('Searching M15 pattern', pair=str_instrument)
                                     pattern_rectX1, pattern_rectX2, pattern_rectY1, pattern_rectY2, lasthigh = get_pattern_m15_RES(history_m15, kijun_h4, anchor_15_min, zones_rectX2_H4[h4_zone], zones_rectY1_H4[h4_zone], zones_rectY2_H4[h4_zone],str_instrument,str_session)
                                     
                                     if(pattern_rectX1 is not None):
@@ -419,10 +407,7 @@ def main():
                                            
                                         watchlist.append(':ballot_box_with_check: In attesa rottura pattern: '+str_instrument)
 
-                                        print('pattern_rectX1: '+str(pattern_rectX1))
-                                        print('pattern_rectX2: '+str(pattern_rectX2))
-                                        print('pattern_rectY1: '+str(pattern_rectY1))
-                                        print('pattern_rectY2: '+str(pattern_rectY2))
+                                        log_trader(f'Pattern: X1={pattern_rectX1}, X2={pattern_rectX2}, Y1={pattern_rectY1}, Y2={pattern_rectY2}', pair=str_instrument)
 
                                         #start of the analysis to open a position
                                         pattern_breaking = False
@@ -442,9 +427,7 @@ def main():
                                                 fib_78_6 = fibonacci_78_6(lasthigh, history_m15[index]['BidLow'])
                                                 
 
-                                                print('fib_78_6: '+str(fib_78_6))
-                                                print('lasthigh: '+str(lasthigh))
-                                                print('pattern_breaking_candle_low: '+str(pattern_breaking_candle_low))
+                                                log_trader(f'Fib 78.6: {fib_78_6}, lasthigh: {lasthigh}, candle_low: {pattern_breaking_candle_low}', pair=str_instrument)
                                             
                                                 ###################
                                                 stop_loss_price = calculate_stop_loss_SHORT(str_instrument,pattern_rectY1,lasthigh)
@@ -496,8 +479,8 @@ def main():
                                                                                                 
                                                 watchlist.append(':ballot_box_with_check: A mercato: '+str_instrument)
 
-                                                print('data della rottura del livello di fibonacci: '+str(history_m15[index]['Date']))
-                                                print('signal: '+str(trade_setup[-1]))
+                                                log_trader(f'Fibonacci level broken at: {history_m15[index]["Date"]}', pair=str_instrument)
+                                                log_trader(f'Signal: {trade_setup[-1]}', pair=str_instrument)
                                                 update_trade_in_progress(trade_setup[-1]['pair'], index, history_m15[index]['Date'])
                                                 break
 
