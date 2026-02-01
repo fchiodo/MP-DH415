@@ -10,6 +10,7 @@ function Simulation() {
   const [closures, setClosures] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState(null)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
 
   // Fetch simulation data from API
   const fetchSignals = useCallback(async () => {
@@ -35,6 +36,7 @@ function Simulation() {
       setSignals([])
       setModifications([])
       setClosures([])
+      setShowClearConfirm(false)
     } catch (error) {
       console.error('Error clearing signals:', error)
     }
@@ -87,8 +89,39 @@ function Simulation() {
             Tracking hypothetical order flow and SL/TP modifications for strategy verification.
           </p>
         </div>
-        <Button variant="secondary" icon="delete_sweep" onClick={clearLogs}>Clear All Logs</Button>
+        <Button variant="secondary" icon="delete_sweep" onClick={() => setShowClearConfirm(true)}>Clear All Logs</Button>
       </div>
+
+      {/* Clear Confirmation Modal */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-[#192633] rounded-xl p-6 max-w-md mx-4 shadow-2xl border border-slate-200 dark:border-[#324d67]">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-500/20 flex items-center justify-center">
+                <span className="material-symbols-outlined text-red-500">warning</span>
+              </div>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Clear All Logs?</h3>
+            </div>
+            <p className="text-slate-600 dark:text-slate-400 mb-6">
+              This will permanently delete all pending signals, modifications, and closures. This action cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="px-4 py-2 rounded-lg text-sm font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-[#233648] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={clearLogs}
+                className="px-4 py-2 rounded-lg text-sm font-bold bg-red-500 text-white hover:bg-red-600 transition-colors"
+              >
+                Yes, Clear All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
