@@ -79,30 +79,51 @@
 
 ```
 MP-DH415/
-├── martina.py              # Script principale di trading
-├── utils.py                # Funzioni di utilità e calcoli tecnici
-├── db_utils.py             # Gestione database e operazioni MT5
-├── kijun.py                # Calcolo indicatore Kijun-sen
-├── combined_script.py      # Orchestratore multi-coppia
-├── slack_begin.py          # Inizializzazione notifiche Slack
-├── cmd_utils.py            # Utility da riga di comando
-├── worker.py               # API Worker per operazioni remote
-├── trades.bat              # Script batch per esecuzione Windows
+├── .env                    # Variabili d'ambiente (FXCM, Slack, etc.)
+├── .env.example            # Template variabili d'ambiente
+├── .gitignore              # File Git ignore
+├── README.md               # Documentazione principale
 ├── my_database.db          # Database SQLite
-├── .env                    # Variabili d'ambiente (SLACK_BOT_TOKEN)
-├── combined_script.spec    # Configurazione PyInstaller
 │
-├── common_samples/         # Libreria FXCM ForexConnect
-│   ├── __init__.py
-│   ├── common.py           # Parsing argomenti e utility
-│   ├── OrderMonitor.py     # Monitoraggio ordini
-│   ├── OrderMonitorNetting.py
-│   ├── BatchOrderMonitor.py
-│   └── TableListenerContainer.py
+├── backend/                # Trading Bot (Python)
+│   ├── martina.py              # Script principale di trading
+│   ├── utils.py                # Funzioni di utilità e calcoli tecnici
+│   ├── db_utils.py             # Gestione database e operazioni MT5
+│   ├── kijun.py                # Calcolo indicatore Kijun-sen
+│   ├── combined_script.py      # Orchestratore multi-coppia
+│   ├── bot_runner.py           # Runner continuo per il bot
+│   ├── slack_begin.py          # Inizializzazione notifiche Slack
+│   ├── cmd_utils.py            # Utility da riga di comando
+│   ├── worker.py               # API Worker per operazioni remote
+│   ├── test_simulation.py      # Test modalità simulazione
+│   ├── requirements.txt        # Dipendenze Python
+│   │
+│   └── common_samples/         # Libreria FXCM ForexConnect
+│       ├── __init__.py
+│       ├── common.py           # Parsing argomenti e utility
+│       ├── OrderMonitor.py     # Monitoraggio ordini
+│       ├── OrderMonitorNetting.py
+│       ├── BatchOrderMonitor.py
+│       └── TableListenerContainer.py
 │
-├── build/                  # File di build PyInstaller
-└── dist/                   # Eseguibile compilato
-    └── combined_script.exe
+├── frontend/               # Web UI (React + Vite)
+│   ├── api/                    # Flask API Server
+│   │   ├── app.py              # REST API endpoints
+│   │   └── requirements.txt    # Dipendenze Python API
+│   ├── src/                    # React source code
+│   │   ├── App.jsx
+│   │   ├── main.jsx
+│   │   ├── index.css
+│   │   ├── components/         # Componenti React
+│   │   ├── context/            # Context API
+│   │   ├── hooks/              # Custom hooks
+│   │   └── pages/              # Pagine principali
+│   ├── package.json            # Dipendenze Node.js
+│   ├── vite.config.js          # Configurazione Vite
+│   └── tailwind.config.js      # Configurazione Tailwind CSS
+│
+└── docs/                   # Documentazione
+    └── DOCUMENTAZIONE.md       # Documentazione tecnica completa
 ```
 
 ---

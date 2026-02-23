@@ -608,7 +608,7 @@ def start_bot():
         }), 400
     
     # Build command - use bot_runner.py for continuous scanning
-    bot_script = Path(__file__).resolve().parent.parent.parent / 'bot_runner.py'
+    bot_script = Path(__file__).resolve().parent.parent.parent / 'backend' / 'bot_runner.py'
     python_path = '/opt/homebrew/bin/python3.10'
     
     # Get scan interval from request or default to 60 seconds
@@ -924,7 +924,7 @@ def get_activity_logs_connection():
 
 @app.route('/api/logs', methods=['GET'])
 def get_logs():
-    """Get recent activity logs"""
+    """Get recent activity logs (excludes TRADER debug logs by default)"""
     conn = get_activity_logs_connection()
     if not conn:
         return jsonify({'logs': []})
@@ -932,13 +932,24 @@ def get_logs():
     try:
         cursor = conn.cursor()
         limit = int(request.args.get('limit', 100))
+        include_debug = request.args.get('include_debug', 'false').lower() == 'true'
         
-        cursor.execute('''
-            SELECT id, timestamp, type, message, pair, details
-            FROM activity_logs
-            ORDER BY id DESC
-            LIMIT ?
-        ''', (limit,))
+        if include_debug:
+            cursor.execute('''
+                SELECT id, timestamp, type, message, pair, details
+                FROM activity_logs
+                ORDER BY id DESC
+                LIMIT ?
+            ''', (limit,))
+        else:
+            # Exclude TRADER logs (debug logs) by default
+            cursor.execute('''
+                SELECT id, timestamp, type, message, pair, details
+                FROM activity_logs
+                WHERE type != 'TRADER'
+                ORDER BY id DESC
+                LIMIT ?
+            ''', (limit,))
         
         logs = []
         for row in cursor.fetchall():
@@ -963,8 +974,11 @@ def stream_logs():
     """
     Server-Sent Events (SSE) endpoint for real-time log streaming.
     Client connects and receives new logs as they are added to the database.
+    Use ?include_debug=true to include TRADER (debug) logs.
     """
-    def generate():
+    include_debug = request.args.get('include_debug', 'false').lower() == 'true'
+    
+    def generate(with_debug):
         conn = get_activity_logs_connection()
         if not conn:
             yield f"data: {json.dumps({'error': 'Database not found'})}\n\n"
@@ -982,7 +996,7 @@ def stream_logs():
             last_id = 0
         
         # Send initial connection message
-        yield f"data: {json.dumps({'type': 'connected', 'lastId': last_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'connected', 'lastId': last_id, 'includeDebug': with_debug})}\n\n"
         
         # Keep connection open and poll for new logs
         while True:
@@ -995,12 +1009,22 @@ def stream_logs():
                     
                 cursor = conn.cursor()
                 
-                cursor.execute('''
-                    SELECT id, timestamp, type, message, pair, details
-                    FROM activity_logs
-                    WHERE id > ?
-                    ORDER BY id ASC
-                ''', (last_id,))
+                if with_debug:
+                    # Include all logs including TRADER (debug)
+                    cursor.execute('''
+                        SELECT id, timestamp, type, message, pair, details
+                        FROM activity_logs
+                        WHERE id > ?
+                        ORDER BY id ASC
+                    ''', (last_id,))
+                else:
+                    # Exclude TRADER logs (debug logs) to avoid flooding
+                    cursor.execute('''
+                        SELECT id, timestamp, type, message, pair, details
+                        FROM activity_logs
+                        WHERE id > ? AND type != 'TRADER'
+                        ORDER BY id ASC
+                    ''', (last_id,))
                 
                 new_logs = cursor.fetchall()
                 
@@ -1016,6 +1040,13 @@ def stream_logs():
                     yield f"data: {json.dumps(log_data)}\n\n"
                     last_id = log['id']
                 
+                # If not including debug, still update last_id to max to skip TRADER logs
+                if not with_debug:
+                    cursor.execute('SELECT MAX(id) FROM activity_logs')
+                    result = cursor.fetchone()
+                    if result[0]:
+                        last_id = result[0]
+                
                 conn.close()
                 
             except sqlite3.OperationalError:
@@ -1029,7 +1060,7 @@ def stream_logs():
             time.sleep(0.5)
     
     return Response(
-        generate(),
+        generate(include_debug),
         mimetype='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',

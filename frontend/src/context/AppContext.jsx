@@ -37,7 +37,9 @@ export function AppProvider({ children }) {
   // Activity Logs - Real-time via SSE
   const [activityLogs, setActivityLogs] = useState([])
   const [sseConnected, setSseConnected] = useState(false)
+  const [includeDebugLogs, setIncludeDebugLogsState] = useState(false)
   const eventSourceRef = useRef(null)
+  const includeDebugRef = useRef(false) // Ref to access current value in callbacks
 
   const [stats, setStats] = useState({
     activeTrades: 0,
@@ -80,10 +82,11 @@ export function AppProvider({ children }) {
     }
   }, [])
 
-  // Fetch initial logs from API
-  const fetchLogs = useCallback(async () => {
+  // Fetch initial logs from API - merges with existing logs to avoid losing any
+  const fetchLogs = useCallback(async (includeDebug = false) => {
     try {
-      const response = await fetch(`${API_URL}/api/logs?limit=100`)
+      const debugParam = includeDebug ? '&include_debug=true' : ''
+      const response = await fetch(`${API_URL}/api/logs?limit=500${debugParam}`)
       const data = await response.json()
       if (data.logs) {
         // Transform to UI format
@@ -94,7 +97,15 @@ export function AppProvider({ children }) {
           message: log.message,
           pair: log.pair
         }))
-        setActivityLogs(formattedLogs)
+        // Merge with existing logs to avoid losing any
+        setActivityLogs(prev => {
+          const existingIds = new Set(prev.map(l => l.id))
+          const newLogs = formattedLogs.filter(l => !existingIds.has(l.id))
+          // Combine and sort by id descending (newest first)
+          const combined = [...prev, ...newLogs]
+          combined.sort((a, b) => b.id - a.id)
+          return combined.slice(0, 500)
+        })
       }
     } catch (error) {
       console.error('Error fetching logs:', error)
@@ -102,14 +113,15 @@ export function AppProvider({ children }) {
   }, [])
 
   // Connect to SSE for real-time logs
-  const connectSSE = useCallback(() => {
+  const connectSSE = useCallback((includeDebug = false) => {
     // Close existing connection if any
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
     }
 
-    console.log('[SSE] Connecting to log stream...')
-    const eventSource = new EventSource(`${API_URL}/api/logs/stream`)
+    const debugParam = includeDebug ? '?include_debug=true' : ''
+    console.log('[SSE] Connecting to log stream...', includeDebug ? '(with debug logs)' : '')
+    const eventSource = new EventSource(`${API_URL}/api/logs/stream${debugParam}`)
     eventSourceRef.current = eventSource
 
     eventSource.onopen = () => {
@@ -156,10 +168,11 @@ export function AppProvider({ children }) {
       setSseConnected(false)
       eventSource.close()
       
-      // Reconnect after 3 seconds
+      // Reconnect after 3 seconds and refetch logs to catch any missed during disconnect
       setTimeout(() => {
         console.log('[SSE] Reconnecting...')
-        connectSSE()
+        fetchLogs(includeDebugRef.current)
+        connectSSE(includeDebugRef.current)
       }, 3000)
     }
 
@@ -181,13 +194,14 @@ export function AppProvider({ children }) {
     }
   }, [botStatus])
 
-  // Load data on mount
+  // Load data on mount (run only once)
   useEffect(() => {
     fetchTrades()
     fetchStats()
     fetchLogs()
     checkBotStatus()
-  }, [fetchTrades, fetchStats, fetchLogs, checkBotStatus])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Connect SSE on mount
   useEffect(() => {
@@ -300,6 +314,20 @@ export function AppProvider({ children }) {
 
   const toggleMode = () => setIsSimulationMode(!isSimulationMode)
 
+  // Toggle debug logs (TRADER type) - refetches and reconnects SSE
+  const setIncludeDebugLogs = useCallback((include) => {
+    console.log('[Logs] Setting include debug logs:', include)
+    setIncludeDebugLogsState(include)
+    includeDebugRef.current = include
+    
+    // Clear current logs and refetch with new setting
+    setActivityLogs([])
+    fetchLogs(include)
+    
+    // Reconnect SSE with new setting
+    connectSSE(include)
+  }, [fetchLogs, connectSSE])
+
   const value = {
     isDarkMode,
     toggleTheme,
@@ -318,6 +346,8 @@ export function AppProvider({ children }) {
     addLog,
     clearLogs,
     sseConnected,
+    includeDebugLogs,
+    setIncludeDebugLogs,
     stats,
     fetchTrades,
     fetchStats

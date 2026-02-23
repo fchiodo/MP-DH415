@@ -4,9 +4,13 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
 import os
+from pathlib import Path
 import certifi
 import ssl
 from ssl import SSLContext
+
+# Database path - always in the project root (parent of backend/)
+DB_PATH = str(Path(__file__).resolve().parent.parent / 'my_database.db')
 
 # ============================================================================
 # CONFIGURAZIONE MODALITÀ SIMULAZIONE
@@ -25,7 +29,7 @@ else:
 
 def initialize_db():
     # Create a database file named 'my_database.db'
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     # Create table
@@ -72,7 +76,7 @@ def initialize_signals_db():
     Inizializza la tabella per i segnali MT5 in modalità simulazione.
     Questa tabella registra tutti i comandi che sarebbero stati inviati a MT5.
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     # Tabella per i segnali di trading (ordini pendenti)
@@ -141,7 +145,7 @@ def log_mt5_signal(signal_type, pair, action, order_type=None, volume=None,
     """
     Registra un segnale MT5 nel database SQLite (modalità simulazione).
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     symbol = pair.replace("/", "") if pair else None
@@ -168,7 +172,7 @@ def log_mt5_modification(pair, action, old_sl=None, new_sl=None,
     """
     Registra una modifica MT5 nel database SQLite (modalità simulazione).
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     symbol = pair.replace("/", "") if pair else None
@@ -192,7 +196,7 @@ def log_mt5_closure(pair, action, volume=None, close_price=None, comment=None):
     """
     Registra una chiusura MT5 nel database SQLite (modalità simulazione).
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     symbol = pair.replace("/", "") if pair else None
@@ -215,7 +219,7 @@ def get_pending_signals():
     Recupera tutti i segnali pendenti (non ancora processati).
     Utile quando si passa da SIMULATION_MODE a produzione.
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     
@@ -230,7 +234,7 @@ def mark_signal_processed(signal_id):
     """
     Marca un segnale come processato.
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     c.execute("UPDATE mt5_signals SET processed = 1 WHERE id = ?", (signal_id,))
@@ -247,7 +251,7 @@ def initialize_activity_logs_db():
     """
     Inizializza la tabella activity_logs per il sistema di logging in tempo reale.
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     c.execute('''
@@ -283,7 +287,7 @@ def add_activity_log(log_type, message, pair=None, details=None):
         pair: Coppia forex opzionale (es. 'EUR/USD')
         details: Dettagli aggiuntivi opzionali (JSON string)
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -307,7 +311,7 @@ def get_recent_logs(limit=100):
     """
     Recupera i log più recenti.
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     
@@ -328,7 +332,7 @@ def get_logs_after_id(last_id):
     """
     Recupera i log con ID maggiore di last_id (per SSE streaming).
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     
@@ -349,7 +353,7 @@ def clear_activity_logs():
     """
     Pulisce tutti i log (opzionale, per manutenzione).
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     c.execute('DELETE FROM activity_logs')
@@ -363,7 +367,7 @@ def get_latest_log_id():
     """
     Ottiene l'ID dell'ultimo log (per inizializzare SSE).
     """
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     c.execute('SELECT MAX(id) FROM activity_logs')
@@ -480,7 +484,7 @@ def log_trader(message, pair=None):
 
 
 def check_in_progress_trade(pair):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     # Set the row_factory attribute to sqlite3.Row
     conn.row_factory = sqlite3.Row
     
@@ -498,7 +502,7 @@ def check_in_progress_trade(pair):
     return record
 
 def check_in_retest_trade(pair):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     # Set the row_factory attribute to sqlite3.Row
     conn.row_factory = sqlite3.Row
 
@@ -513,7 +517,7 @@ def check_in_retest_trade(pair):
     return record
 
 def fetch_trades_from_db(pair):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     # Set the row_factory attribute to sqlite3.Row
     conn.row_factory = sqlite3.Row
 
@@ -548,7 +552,7 @@ def fetch_trades_from_mt5(pair):
     return orders, positions
 
 def check_in_closed_trade(pair, pattern_rectX1):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     # Set the row_factory attribute to sqlite3.Row
     conn.row_factory = sqlite3.Row
 
@@ -564,7 +568,7 @@ def check_in_closed_trade(pair, pattern_rectX1):
     return record
 
 def get_closed_trades_after_date(pair, pattern_rectX1):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     # Set the row_factory attribute to sqlite3.Row
     conn.row_factory = sqlite3.Row
 
@@ -581,7 +585,7 @@ def get_closed_trades_after_date(pair, pattern_rectX1):
 
 def drop_all_tables():
     # Connect to SQLite database
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     # Fetch all table names
@@ -600,7 +604,7 @@ def drop_all_tables():
 
 def drop_table(table_name):
     # Connect to SQLite database
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     # Drop table
@@ -613,7 +617,7 @@ def drop_table(table_name):
     print(f"Table {table_name} dropped.")
 
 def clean_table(table_name):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     # SQL statement to delete all records from the table
@@ -627,7 +631,7 @@ def clean_table(table_name):
 
 def update_trade_in_progress(pair, entry_price_index, entry_price_date):
 
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     table = 'trades'
     status = 'IN PROGRESS'
     status_to_check = 'IN RETEST'
@@ -646,7 +650,7 @@ def update_trade_in_progress(pair, entry_price_index, entry_price_date):
     conn.close()
 
 def update_trade_stoploss(pair, new_stop_loss, entry_price_index, rr):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
 
     table = 'trades'
     status_to_check = 'IN PROGRESS'
@@ -698,7 +702,7 @@ def upsert_order_waiting_retest(trade_setup,target_1_1):
     print('upsert_order_waiting_retest')
     print('target_1_1: '+str(target_1_1))
     print('target: '+str(trade_setup['target_price']))
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     # Check if a trade for the instrument with status 'IN RETEST' already exists
@@ -841,7 +845,7 @@ def upsert_order_waiting_retest(trade_setup,target_1_1):
     conn.close()
 
 def update_trade_closed(pair, result, trade_type, close_date, risk_reward):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     with conn:
         cursor = conn.cursor()
@@ -904,7 +908,7 @@ def update_trade_closed(pair, result, trade_type, close_date, risk_reward):
     conn.close()
 
 def get_partial_trade_closed(pair, entry_date):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     # Set the row_factory attribute to sqlite3.Row
     conn.row_factory = sqlite3.Row
 
@@ -919,7 +923,7 @@ def get_partial_trade_closed(pair, entry_date):
     return record
 
 def get_partial_trade(pair):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     # Set the row_factory attribute to sqlite3.Row
     conn.row_factory = sqlite3.Row
 
@@ -934,7 +938,7 @@ def get_partial_trade(pair):
     return record
 
 def remove_closed_trades(pair, entry_date, pattern_x1, pattern_y1, pattern_y2):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
 
     table = 'trades'
     status_to_check = 'CLOSED'
@@ -950,7 +954,7 @@ def remove_closed_trades(pair, entry_date, pattern_x1, pattern_y1, pattern_y2):
 
 def close_trade_in_retest(pair):
     print('close_trade_in_retest')
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     table = 'trades'
     status = 'CLOSED'
     status_to_check = 'IN RETEST'
@@ -972,7 +976,7 @@ def close_trade_in_retest(pair):
 
 def get_stop_loss(pair, entry_date):
     # Connect to SQLite database
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
     # SQL statement to select the stop_loss
@@ -1239,7 +1243,7 @@ def close_mt5_orders_already_processed():
     # SIMULATION MODE
     if SIMULATION_MODE:
         # Connect to the SQLite database
-        conn = sqlite3.connect('my_database.db')
+        conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -1270,7 +1274,7 @@ def close_mt5_orders_already_processed():
             print("No pending orders found.")
 
         # Connect to the SQLite database
-        conn = sqlite3.connect('my_database.db')
+        conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -1380,7 +1384,7 @@ def mt5_close_positions(pair):
 
 
 def update_trade_target(pair, new_target, rr):
-    conn = sqlite3.connect('my_database.db')
+    conn = sqlite3.connect(DB_PATH)
     #print ('pair: '+str(pair)+' - new target: '+str(new_target)+' - rr: '+str(rr))
     table = 'trades'
     cursor = conn.cursor()

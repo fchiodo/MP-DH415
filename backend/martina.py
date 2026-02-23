@@ -146,14 +146,15 @@ def main():
                     
                     for index in range(start_session, len(history_DLY)):
         
-                        zones_rectX1_DLY, zones_rectX2_DLY, zones_rectY1_DLY, zones_rectY2_DLY, final_zones_DLY, zone_type_DLY = get_zones(history_DLY, kijun_h4, index, 'DLY', str_session, None)
+                        zones_rectX1_DLY, zones_rectX2_DLY, zones_rectY1_DLY, zones_rectY2_DLY, final_zones_DLY, zone_type_DLY = get_zones(history_DLY, kijun_h4, index, 'DLY', str_session, None, str_instrument)
                         log_trader(f'final_zones_DLY: {final_zones_DLY}', pair=str_instrument)
                         if len(final_zones_DLY) != 0:
                             log_trader(f'zone_type_DLY: {zone_type_DLY}', pair=str_instrument)
                             
                         if len(final_zones_DLY) == 0:
                             continue
-
+                        for zone in final_zones_DLY:
+                            log_trader(f'zones_rectX1_DLY[{zone}]: {zones_rectX1_DLY[zone]}', pair=str_instrument)
                         for zone in reversed(final_zones_DLY):
                             if zone_type_DLY == 'SUP':
                                 DLY_candle, DLY_zone_valid_for_kijun, DLY_valid_zone, anchor = validate_support(zones_rectX1_DLY[zone], zones_rectX2_DLY[zone], zones_rectY1_DLY[zone], zones_rectY2_DLY[zone], history_DLY, 'DLY', kijun_h4, str_instrument, 'Trade')
@@ -177,7 +178,7 @@ def main():
                             index_of_last_candle = get_index_of_last_h4_candle_on_daily_date(history_H4, DLY_candle["Date"], str_session, date_to)
                             print('index of last candle: '+str(index_of_last_candle))
                             #input()
-                            zones_rectX1_H4, zones_rectX2_H4, zones_rectY1_H4, zones_rectY2_H4, final_zones_H4, zone_type_H4 = get_zones(history_H4, kijun_h4,len(history_H4)-1 , 'H4', str_session, zones_rectX1_DLY[dly_zone])
+                            zones_rectX1_H4, zones_rectX2_H4, zones_rectY1_H4, zones_rectY2_H4, final_zones_H4, zone_type_H4 = get_zones(history_H4, kijun_h4,len(history_H4)-1 , 'H4', str_session, zones_rectX1_DLY[dly_zone], str_instrument)
                             h4_zone = -1                        
                             H4_valid_zone = False
                             if zone_type_H4 == 'SUP':

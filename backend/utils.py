@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, time
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
-from db_utils import update_trade_stoploss, update_trade_closed, get_partial_trade, update_trade_in_progress,close_trade_in_retest, upsert_order_waiting_retest, close_mt5_orders_already_processed, update_trade_target, update_trade_target_ALL, get_partial_trade_closed, close_mt5_partial_positions, fetch_trades_from_db, fetch_trades_from_mt5, mt5_place_order, mt5_close_order, mt5_close_positions, SIMULATION_MODE, log_mt5_signal
+from db_utils import update_trade_stoploss, update_trade_closed, get_partial_trade, update_trade_in_progress,close_trade_in_retest, upsert_order_waiting_retest, close_mt5_orders_already_processed, update_trade_target, update_trade_target_ALL, get_partial_trade_closed, close_mt5_partial_positions, fetch_trades_from_db, fetch_trades_from_mt5, mt5_place_order, mt5_close_order, mt5_close_positions, SIMULATION_MODE, log_mt5_signal, log_trader
 
 # Import condizionale di MetaTrader5
 if not SIMULATION_MODE:
@@ -134,7 +134,7 @@ def get_index_of_last_h4_candle_on_daily_date(history_H4, target_date_str, sessi
             last_index = i
     return last_index  # Return -1 if no candle is found on the target date
 
-def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate):
+def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate, str_instrument=None):
     """
     Identifica zone di supporto/resistenza allineato alla logica PineScript MP-DH415 v5.8
     
@@ -152,6 +152,9 @@ def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate):
     final_zones = []
     zone = 0
     zone_type = None
+
+    log_trader(f'history[index]: {history[index]}', pair=str_instrument)
+    log_trader(f'timerange: {timerange}', pair=str_instrument)
 
     dt = pd.to_datetime(history[index]["Date"])
    
@@ -218,6 +221,9 @@ def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate):
             lastclosearray.append(history[i]['BidClose'])
             
             # Calcolo minlow con controllo i+1 (come nel PineScript)
+            log_trader(f'history[i][BidLow]: {history[i]["BidLow"]}', pair=str_instrument)
+            log_trader(f'history[i+1][BidLow]: {history[i+1]["BidLow"]}', pair=str_instrument)
+            
             if i == index - 1:
                 minlow = history[i]['BidLow']
             else:

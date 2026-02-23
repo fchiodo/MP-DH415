@@ -29,7 +29,7 @@ const LOG_TYPES = ['SYSTEM', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'TRADE', 'SI
 
 function ActivityLog({ logs, onClear, isExpanded = false, onToggleExpand }) {
   const logContainerRef = useRef(null)
-  const { sseConnected } = useApp()
+  const { sseConnected, includeDebugLogs, setIncludeDebugLogs } = useApp()
   const [showFilterMenu, setShowFilterMenu] = useState(false)
   const [activeFilters, setActiveFilters] = useState(() => {
     // All types enabled by default, except TRADER (debug logs)
@@ -38,8 +38,19 @@ function ActivityLog({ logs, onClear, isExpanded = false, onToggleExpand }) {
     return filters
   })
 
+  // Sync TRADER filter with context state
+  useEffect(() => {
+    setActiveFilters(prev => ({ ...prev, TRADER: includeDebugLogs }))
+  }, [includeDebugLogs])
+
   const toggleFilter = (type) => {
-    setActiveFilters(prev => ({ ...prev, [type]: !prev[type] }))
+    const newValue = !activeFilters[type]
+    setActiveFilters(prev => ({ ...prev, [type]: newValue }))
+    
+    // If toggling TRADER filter, also update the API to include/exclude debug logs
+    if (type === 'TRADER') {
+      setIncludeDebugLogs(newValue)
+    }
   }
 
   const filteredLogs = logs.filter(log => activeFilters[log.type] !== false)
