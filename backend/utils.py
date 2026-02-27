@@ -221,8 +221,8 @@ def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate, str_instru
             lastclosearray.append(history[i]['BidClose'])
             
             # Calcolo minlow con controllo i+1 (come nel PineScript)
-            log_trader(f'history[i][BidLow]: {history[i]["BidLow"]}', pair=str_instrument)
-            log_trader(f'history[i+1][BidLow]: {history[i+1]["BidLow"]}', pair=str_instrument)
+            # log_trader(f'history[i][BidLow]: {history[i]["BidLow"]}', pair=str_instrument)
+            #log_trader(f'history[i+1][BidLow]: {history[i+1]["BidLow"]}', pair=str_instrument)
             
             if i == index - 1:
                 minlow = history[i]['BidLow']

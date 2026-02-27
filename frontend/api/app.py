@@ -14,18 +14,26 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Load .env from parent directory
-ENV_PATH = Path(__file__).resolve().parent.parent.parent / '.env'
-DB_PATH = Path(__file__).resolve().parent.parent.parent / 'my_database.db'
+# Paths: from frontend/api/ up to repo root
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+ENV_PATH = _REPO_ROOT / '.env'
+DB_PATH = _REPO_ROOT / 'my_database.db'
 
-load_dotenv(ENV_PATH)
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
 
 app = Flask(__name__)
 
-# Enable CORS for React frontend - explicit configuration
+# CORS: localhost (dev) + Render frontend URL from env (production)
+_cors_origins = [
+    "http://localhost:3000", "http://127.0.0.1:3000",
+    "http://localhost:3001", "http://127.0.0.1:3001",
+]
+if os.getenv('FRONTEND_URL'):
+    _cors_origins.append(os.getenv('FRONTEND_URL').rstrip('/'))
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
+        "origins": _cors_origins,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
@@ -61,9 +69,11 @@ def get_config():
 
 @app.route('/api/config', methods=['PUT'])
 def update_config():
-    """Update configuration in .env file"""
+    """Update configuration in .env file (no-op on Render if .env is not present)"""
     data = request.json
-    
+    if not ENV_PATH.exists():
+        return jsonify({'success': False, 'error': 'No .env file; set variables in Render dashboard'}), 400
+
     try:
         # Update FXCM settings
         if 'fxcm' in data:
@@ -580,9 +590,15 @@ def get_bot_status():
 
 @app.route('/api/bot/start', methods=['POST'])
 def start_bot():
-    """Start the trading bot"""
+    """Start the trading bot (no-op on Render: use Background Worker instead)"""
     global bot_process, bot_start_time
-    
+
+    if os.getenv('RENDER'):
+        return jsonify({
+            'success': False,
+            'error': 'On Render the bot runs as a Background Worker; start/stop is not available from the UI.'
+        }), 503
+
     # Check if bot is already running
     if bot_process is not None and bot_process.poll() is None:
         return jsonify({
@@ -674,9 +690,15 @@ def start_bot():
 
 @app.route('/api/bot/stop', methods=['POST'])
 def stop_bot():
-    """Stop the trading bot"""
+    """Stop the trading bot (no-op on Render: use Background Worker instead)"""
     global bot_process, bot_start_time
-    
+
+    if os.getenv('RENDER'):
+        return jsonify({
+            'success': False,
+            'error': 'On Render the bot runs as a Background Worker; start/stop is not available from the UI.'
+        }), 503
+
     if bot_process is None or bot_process.poll() is not None:
         return jsonify({
             'success': False,
