@@ -68,7 +68,7 @@ def run_martina_for_pair(pair):
     # Build command
     script_dir = os.path.dirname(os.path.abspath(__file__))
     martina_script = os.path.join(script_dir, 'martina.py')
-    python_path = '/opt/homebrew/bin/python3.10'
+    python_path = sys.executable  # Use the same Python interpreter running this script
     
     cmd = [
         python_path,
