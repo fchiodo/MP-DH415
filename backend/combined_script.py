@@ -1,99 +1,74 @@
 import time
 import subprocess
-
-from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
-from dotenv import load_dotenv
-from datetime import datetime
+import sys
 import os
-import certifi
-import ssl
-from ssl import SSLContext
+from pathlib import Path
+from datetime import datetime
+
+from dotenv import load_dotenv
+
+from db_utils import send_slack_message
+
+# .env nella root del progetto (parent di backend/)
+SCRIPT_DIR = Path(__file__).resolve().parent
+load_dotenv(SCRIPT_DIR.parent / '.env')
+
+DEFAULT_PAIRS = [
+    "EUR/USD", "AUD/USD", "GBP/USD", "USD/JPY", "GBP/JPY", "USD/CAD",
+    "EUR/JPY", "USD/CHF", "NZD/USD", "AUD/JPY", "EUR/GBP", "CAD/JPY",
+    "GBP/AUD", "AUD/CAD", "EUR/AUD", "EUR/CAD", "GBP/CAD", "EUR/NZD",
+    "AUD/NZD", "GBP/CHF", "GBP/NZD", "CHF/JPY", "EUR/CHF", "AUD/CHF",
+    "CAD/CHF", "NZD/CAD", "NZD/CHF", "NZD/JPY",
+]
 
 
 def post_to_slack():
-    # Change the directory to where your .env file is
+    channel = os.getenv('SLACK_CHANNEL', 'mt-bot')
+    message = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    send_slack_message(channel, message)
 
-    os.chdir("C:\\Users\\Administrator\\Documents\\Eseguibile")
-    
-
-    # Load environment variables
-    env_path = ".env"
-    load_dotenv(env_path)
-
-    # Initialize Slack client
-    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
-    sslcert = SSLContext()
-    client = WebClient(token=os.environ['SLACK_BOT_TOKEN'], ssl=sslcert)
-    channel = 'mt-bot'
-    current_timestamp = datetime.now()
-    message = current_timestamp.strftime("%Y-%m-%d %H:%M:%S")
-
-    try:
-
-        # Use this context in the request
-        response = client.chat_postMessage(
-            channel=channel,
-            text=message
-        )
-
-        print(f"Message sent: {response['ts']}")
-    except SlackApiError as e:
-        print(f"Error sending message: {e}")
 
 def run_martina(arguments):
-    # This function runs martina.py with given arguments
-    subprocess.run(["python", "martina.py"] + arguments)
+    subprocess.run(
+        [sys.executable, str(SCRIPT_DIR / "martina.py")] + arguments,
+        cwd=str(SCRIPT_DIR),
+    )
 
-def run_martina(arguments):
-    # This function runs martina.py with given arguments
-    subprocess.run(["python", "C:\\Users\\Administrator\\Documents\\Eseguibile\\martina.py"] + arguments)
+
+def get_pairs():
+    pairs_str = os.getenv('ACTIVE_PAIRS', '')
+    pairs = [p.strip() for p in pairs_str.split(',') if p.strip()]
+    return pairs or DEFAULT_PAIRS
 
 
 def main():
+    login_id = os.getenv('FXCM_LOGIN_ID', '')
+    password = os.getenv('FXCM_PASSWORD', '')
+    url = os.getenv('FXCM_URL', 'http://www.fxcorporate.com/Hosts.jsp')
+    connection = os.getenv('FXCM_CONNECTION', 'Demo')
+
+    if not login_id or not password:
+        print("FXCM_LOGIN_ID / FXCM_PASSWORD non configurati nel file .env")
+        sys.exit(1)
+
     # Post initial message to Slack
     post_to_slack()
 
-    # Define the parameters for each martina.py call
-    params_list = [
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "EUR/USD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "AUD/USD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "GBP/USD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "USD/JPY", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "GBP/JPY", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "USD/CAD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "EUR/JPY", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "USD/CHF", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "NZD/USD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "AUD/JPY", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "EUR/GBP", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "CAD/JPY", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "GBP/AUD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "AUD/CAD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "EUR/AUD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "EUR/CAD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "GBP/CAD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "EUR/NZD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "AUD/NZD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "GBP/CHF", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "GBP/NZD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "CHF/JPY", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "EUR/CHF", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "AUD/CHF", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "CAD/CHF", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "NZD/CAD", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "NZD/CHF", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-        ["-l", "D261369496", "-p", "6Ufxr", "-u", "http://www.fxcorporate.com/Hosts.jsp", "-i", "NZD/JPY", "-c", "Demo", "-datefrom", "04.10.2022 00:00:00", "-session", "Trade"],
-    ]
+    for pair in get_pairs():
+        print(f"processing: {pair}")
+        run_martina([
+            "-l", login_id,
+            "-p", password,
+            "-u", url,
+            "-i", pair,
+            "-c", connection,
+            "-datefrom", "04.10.2022 00:00:00",
+            "-session", "Trade",
+        ])
+        time.sleep(1)
 
-    # Loop through each set of parameters, running the script and pausing
-    for params in params_list:
-        print(f"processing: {params[7]}")
-        run_martina(params)
-        time.sleep(1)  # 3-second delay
 
 if __name__ == "__main__":
     main()
 
- # pyinstaller --onefile combined_script.py 
-
+# pyinstaller --onefile combined_script.py

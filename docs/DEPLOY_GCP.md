@@ -103,10 +103,14 @@ chmod +x ~/MP-DH415/deploy/gcp_setup.sh
 ```
 
 Lo script in automatico:
-- Installa Python 3.10
+- Installa Python 3.10, nginx e Node.js 20
+- Crea 2 GB di swap (necessari sulla e2-micro per build e runtime)
 - Crea un virtualenv in `~/MP-DH415/venv`
 - Installa tutte le dipendenze Python (incluso `forexconnect`)
-- Registra e avvia i due servizi systemd (`trading-bot` e `flask-api`)
+- Compila il frontend React e lo serve con nginx sulla porta 80
+- Configura nginx come reverse proxy: le chiamate `/api/*` vanno all'API Flask su `127.0.0.1:5001` (nessuna porta extra da aprire, niente CORS)
+- Installa la regola sudoers che permette ai pulsanti Start/Stop della UI di controllare il servizio `trading-bot`
+- Registra e avvia i servizi systemd (`trading-bot` e `flask-api`)
 
 ---
 
@@ -137,42 +141,33 @@ cd ~/MP-DH415 && git pull && sudo systemctl restart trading-bot flask-api
 
 ---
 
-## 5. Aprire la porta 5001 per l'API Flask
+## 5. Accesso dall'esterno
 
-Se vuoi accedere alla Flask API dall'esterno (es. dal browser su Mac):
+Non serve aprire la porta 5001: nginx serve tutto sulla porta 80.
 
-```bash
-# Crea una regola firewall GCP
-gcloud compute firewall-rules create allow-flask-api \
-  --allow tcp:5001 \
-  --source-ranges=0.0.0.0/0 \
-  --description="Flask API per Trading Bot"
-```
+- Frontend: `http://EXTERNAL_IP/`
+- API (via proxy nginx): `http://EXTERNAL_IP/api/health`
 
-Oppure dalla Console: **VPC Network** → **Firewall** → **Crea regola** → porta TCP 5001.
-
-L'API sarà raggiungibile su: `http://EXTERNAL_IP:5001`
+Basta la regola firewall "Consenti traffico HTTP" scelta alla creazione della VM
+(o il tag `http-server`). L'API Flask ascolta solo su `127.0.0.1:5001` e non è
+raggiungibile direttamente da internet.
 
 Trova l'IP esterno su Console → Compute Engine → la tua istanza → colonna **IP esterno**.
 
 ---
 
-## 6. Frontend React
+## 6. Aggiornare il codice sulla VM
 
-Il frontend React è un'app statica. Opzioni:
-
-**A) Build locale, serve statico dalla VM**
 ```bash
-# In locale:
-cd ~/Documents/MP-DH415/frontend
-VITE_API_URL=http://EXTERNAL_IP:5001 npm run build
+cd ~/MP-DH415
+git pull
 
-# Copia dist/ sulla VM (o committala nel repo)
-scp -r dist/ trading-bot:~/MP-DH415/frontend/dist
+# Se è cambiato il frontend, ricompila la build servita da nginx
+cd frontend && VITE_API_URL='' npm run build && cd ..
+
+# Riavvia i servizi
+sudo systemctl restart flask-api trading-bot
 ```
-
-**B) Render.com Static Site (gratuito)**  
-Crea un Static Site su Render puntato alla cartella `frontend` con `VITE_API_URL=http://EXTERNAL_IP:5001`.
 
 ---
 
@@ -202,9 +197,14 @@ La libreria FXCM `forexconnect` è ora inclusa nelle dipendenze Python per Linux
 ```
 VM GCP e2-micro (us-central1)
 │
+├─ nginx (porta 80, esposta)
+│   ├─ /          → frontend/dist (build React statica)
+│   └─ /api/*     → proxy verso 127.0.0.1:5001
+│
 ├─ systemd: flask-api.service
-│   └─ gunicorn → frontend/api/app.py → porta 5001
-│       └─ legge/scrive my_database.db (SQLite)
+│   └─ gunicorn (gthread) → frontend/api/app.py → 127.0.0.1:5001
+│       ├─ legge/scrive my_database.db (SQLite)
+│       └─ Start/Stop UI → sudo systemctl start|stop trading-bot
 │
 └─ systemd: trading-bot.service
     └─ backend/bot_runner.py --interval 300

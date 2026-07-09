@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react'
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001'
+import { API_URL as API_BASE_URL } from '../config'
 
 export function useApi() {
   const [loading, setLoading] = useState(false)

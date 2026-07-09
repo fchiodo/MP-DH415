@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import Button from '../components/common/Button'
-
-const API_URL = 'http://localhost:5001'
+import { API_URL } from '../config'
 
 // All available currency pairs
 const ALL_PAIRS = [

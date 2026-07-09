@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import StatsCard from '../components/common/StatsCard'
 import Button from '../components/common/Button'
-
-const API_URL = 'http://localhost:5001'
+import { API_URL } from '../config'
 
 function Simulation() {
   const [signals, setSignals] = useState([])

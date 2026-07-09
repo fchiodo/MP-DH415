@@ -10,18 +10,29 @@ REPO_DIR="/home/$USER/MP-DH415"
 VENV_DIR="$REPO_DIR/venv"
 PYTHON_VERSION="3.10"
 
-echo "=== [1/7] Aggiornamento sistema ==="
+echo "=== [1/9] Aggiornamento sistema ==="
 sudo apt-get update -y
 sudo apt-get upgrade -y
-sudo apt-get install -y git curl build-essential libssl-dev
+sudo apt-get install -y git curl build-essential libssl-dev nginx
 
-echo "=== [2/7] Installazione Python $PYTHON_VERSION ==="
+# Swap da 2GB: la e2-micro ha solo 1GB di RAM, serve per la build del frontend
+# e per evitare OOM quando bot + API girano insieme
+if [ ! -f /swapfile ]; then
+    echo "=== Creazione swap 2GB ==="
+    sudo fallocate -l 2G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab > /dev/null
+fi
+
+echo "=== [2/9] Installazione Python $PYTHON_VERSION ==="
 sudo apt-get install -y software-properties-common
 sudo add-apt-repository ppa:deadsnakes/ppa -y
 sudo apt-get update -y
 sudo apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev python3-pip
 
-echo "=== [3/7] Clone / aggiornamento repository ==="
+echo "=== [3/9] Clone / aggiornamento repository ==="
 if [ -d "$REPO_DIR" ]; then
     echo "Repository già presente, pull..."
     cd "$REPO_DIR"
@@ -33,16 +44,16 @@ else
     cd "$REPO_DIR"
 fi
 
-echo "=== [4/7] Creazione virtualenv ==="
+echo "=== [4/9] Creazione virtualenv ==="
 python${PYTHON_VERSION} -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 
-echo "=== [5/7] Installazione dipendenze Python ==="
+echo "=== [5/9] Installazione dipendenze Python ==="
 pip install --upgrade pip
 pip install -r "$REPO_DIR/backend/requirements.txt"
 pip install -r "$REPO_DIR/frontend/api/requirements.txt"
 
-echo "=== [6/7] Configurazione file .env ==="
+echo "=== [6/9] Configurazione file .env ==="
 if [ ! -f "$REPO_DIR/.env" ]; then
     echo "ATTENZIONE: file .env non trovato in $REPO_DIR"
     echo "Crea il file .env con i tuoi valori prima di avviare i servizi."
@@ -64,7 +75,31 @@ else
     echo "File .env trovato."
 fi
 
-echo "=== [7/7] Installazione servizi systemd ==="
+echo "=== [7/9] Build frontend React ==="
+# Node.js 20 (NodeSource) se non presente
+if ! command -v node > /dev/null || [ "$(node -v | cut -c2-3)" -lt 18 ]; then
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+fi
+
+cd "$REPO_DIR/frontend"
+npm ci
+# VITE_API_URL vuota → il frontend usa URL relativi /api/* serviti da nginx
+VITE_API_URL='' npm run build
+cd "$REPO_DIR"
+
+echo "=== [8/9] Configurazione nginx ==="
+sed "s|__REPO_DIR__|$REPO_DIR|g" "$REPO_DIR/deploy/nginx.conf" \
+    | sudo tee /etc/nginx/sites-available/trading-bot > /dev/null
+sudo ln -sf /etc/nginx/sites-available/trading-bot /etc/nginx/sites-enabled/trading-bot
+sudo rm -f /etc/nginx/sites-enabled/default
+# nginx (utente www-data) deve poter leggere la build dentro la home
+sudo chmod o+x "/home/$USER"
+sudo nginx -t
+sudo systemctl restart nginx
+sudo systemctl enable nginx
+
+echo "=== [9/9] Installazione servizi systemd ==="
 # Sostituisce il placeholder $USER nei service file e li copia in systemd
 sed "s|__USER__|$USER|g; s|__REPO_DIR__|$REPO_DIR|g; s|__VENV_DIR__|$VENV_DIR|g" \
     "$REPO_DIR/deploy/trading-bot.service" \
@@ -74,11 +109,17 @@ sed "s|__USER__|$USER|g; s|__REPO_DIR__|$REPO_DIR|g; s|__VENV_DIR__|$VENV_DIR|g"
     "$REPO_DIR/deploy/flask-api.service" \
     | sudo tee /etc/systemd/system/flask-api.service > /dev/null
 
+# Permette all'API (che gira come $USER) di avviare/fermare il bot dalla UI
+# senza password, limitatamente a questi due comandi
+echo "$USER ALL=(root) NOPASSWD: /usr/bin/systemctl start trading-bot, /usr/bin/systemctl stop trading-bot" \
+    | sudo tee /etc/sudoers.d/trading-bot > /dev/null
+sudo chmod 440 /etc/sudoers.d/trading-bot
+
 sudo systemctl daemon-reload
 sudo systemctl enable trading-bot
 sudo systemctl enable flask-api
-sudo systemctl start flask-api
-sudo systemctl start trading-bot
+sudo systemctl restart flask-api
+sudo systemctl restart trading-bot
 
 echo ""
 echo "======================================================"

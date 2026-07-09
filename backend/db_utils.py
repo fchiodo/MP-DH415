@@ -9,8 +9,11 @@ import certifi
 import ssl
 from ssl import SSLContext
 
-# Database path - always in the project root (parent of backend/)
-DB_PATH = str(Path(__file__).resolve().parent.parent / 'my_database.db')
+# Project root (parent of backend/): .env and database live there
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_REPO_ROOT / '.env')
+
+DB_PATH = str(_REPO_ROOT / 'my_database.db')
 
 # ============================================================================
 # CONFIGURAZIONE MODALITÀ SIMULAZIONE
@@ -56,11 +59,20 @@ def initialize_db():
             zones_rectY1_H4 REAL, 
             zones_rectY2_H4 REAL,
             pattern_x1 TEXT,
-            pattern_y1 REAL, 
+            pattern_y1 REAL,
             pattern_y2 REAL,
-            breakup_date TEXT
+            breakup_date TEXT,
+            fibonacci100 REAL
         )
     ''')
+
+    # Migrazione per database creati con lo schema precedente (senza fibonacci100)
+    c.execute("PRAGMA table_info(trades)")
+    existing_columns = {row[1] for row in c.fetchall()}
+    if 'fibonacci100' not in existing_columns:
+        c.execute('ALTER TABLE trades ADD COLUMN fibonacci100 REAL')
+    if 'breakup_date' not in existing_columns:
+        c.execute('ALTER TABLE trades ADD COLUMN breakup_date TEXT')
 
     # Save (commit) the changes
     conn.commit()
@@ -696,7 +708,7 @@ def update_trade_stoploss(pair, new_stop_loss, entry_price_index, rr):
 
             # send a trading request
             result = mt5.order_send(request)
-            send_slack_message('general', str(result))
+            send_slack_message(os.getenv('SLACK_CHANNEL', 'general'), str(result))
 
 def upsert_order_waiting_retest(trade_setup,target_1_1):
     print('upsert_order_waiting_retest')
@@ -1486,13 +1498,13 @@ def update_trade_target_ALL(pair, new_target, rr):
     mt5.shutdown()
 
 def send_slack_message(channel, message):
+    token = os.getenv('SLACK_BOT_TOKEN')
+    if not token:
+        print("SLACK_BOT_TOKEN not configured: Slack message skipped")
+        return
 
-    env_path = ".env"
-    load_dotenv(env_path)
-
-    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
-    sslcert = SSLContext()
-    client = WebClient(token=os.environ['SLACK_BOT_TOKEN'], ssl=sslcert)
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    client = WebClient(token=token, ssl=ssl_context)
 
     try:
         response = client.chat_postMessage(

@@ -1,9 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+import { API_URL } from '../config'
 
 const AppContext = createContext()
-
-// API URL - change this if backend runs on different port
-const API_URL = 'http://localhost:5001'
 
 export function AppProvider({ children }) {
   // Theme management

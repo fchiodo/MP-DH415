@@ -544,13 +544,13 @@ def get_resistences(history, index, session, timerange, dlyZoneDate, kijun_h4=No
     return zones_rectX1, zones_rectX2, zones_rectY1, zones_rectY2, final_zones
 
 def send_slack_message(channel, message):
+    token = os.getenv('SLACK_BOT_TOKEN')
+    if not token:
+        print("SLACK_BOT_TOKEN not configured: Slack message skipped")
+        return
 
-    env_path = ".env"
-    load_dotenv(env_path)
-
-    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
-    sslcert = SSLContext()
-    client = WebClient(token=os.environ['SLACK_BOT_TOKEN'], ssl=sslcert)
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    client = WebClient(token=token, ssl=ssl_context)
 
     try:
         response = client.chat_postMessage(

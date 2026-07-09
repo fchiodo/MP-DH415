@@ -127,6 +127,13 @@ def get_db_connection():
     return conn
 
 
+def iso_date_expr(column):
+    """SQL expression converting the bot's 'MM.DD.YYYY HH:MM:SS' text dates to
+    ISO 'YYYY-MM-DD HH:MM:SS', so they can be sorted and compared correctly."""
+    return (f"SUBSTR({column}, 7, 4) || '-' || SUBSTR({column}, 1, 2) || '-' || "
+            f"SUBSTR({column}, 4, 2) || SUBSTR({column}, 11)")
+
+
 # ============================================================================
 # TRADES ENDPOINTS
 # ============================================================================
@@ -142,12 +149,12 @@ def get_trades():
         cursor = conn.cursor()
         
         # Get all trades from the 'trades' table
-        cursor.execute('''
-            SELECT rowid, pair, status, trade_type, entry_date, close_date, 
-                   entry_price, stop_loss, target, direction, 
+        cursor.execute(f'''
+            SELECT rowid, pair, status, trade_type, entry_date, close_date,
+                   entry_price, stop_loss, target, direction,
                    initial_risk_reward, final_risk_reward, profit, result
-            FROM trades 
-            ORDER BY entry_date DESC
+            FROM trades
+            ORDER BY {iso_date_expr('entry_date')} DESC
         ''')
         all_trades = [dict(row) for row in cursor.fetchall()]
         
@@ -178,12 +185,12 @@ def get_active_trades():
         cursor = conn.cursor()
         
         # Get trades that are not closed (case-insensitive)
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT rowid, pair, status, direction, entry_price, initial_risk_reward
-            FROM trades 
+            FROM trades
             WHERE UPPER(status) NOT IN ('CLOSED', 'COMPLETED', 'STOPPED')
               AND close_date IS NULL
-            ORDER BY entry_date DESC
+            ORDER BY {iso_date_expr('entry_date')} DESC
         ''')
         rows = cursor.fetchall()
         
@@ -270,10 +277,11 @@ def get_trade_stats():
         win_rate = (wins / total_closed * 100) if total_closed > 0 else 0
         
         # Calculate today's profit (trades closed today)
+        # close_date is stored as 'MM.DD.YYYY HH:MM:SS'
         cursor.execute('''
-            SELECT SUM(CAST(profit AS REAL)) FROM trades 
+            SELECT SUM(CAST(profit AS REAL)) FROM trades
             WHERE close_date LIKE ?
-        ''', (datetime.now().strftime('%Y-%m-%d') + '%',))
+        ''', (datetime.now().strftime('%m.%d.%Y') + '%',))
         today_profit_result = cursor.fetchone()[0]
         today_profit = today_profit_result if today_profit_result else 0
         
@@ -321,18 +329,19 @@ def get_performance():
         time_filter = request.args.get('period', 'all')
         direction_filter = request.args.get('direction', 'all')
         
-        # Build date filter
+        # Build date filter (close_date is 'MM.DD.YYYY HH:MM:SS' → convert to ISO)
+        iso_close = iso_date_expr('close_date')
         date_condition = ""
         if time_filter == '24h':
-            date_condition = "AND close_date >= datetime('now', '-1 day')"
+            date_condition = f"AND {iso_close} >= datetime('now', '-1 day')"
         elif time_filter == '7d':
-            date_condition = "AND close_date >= datetime('now', '-7 days')"
+            date_condition = f"AND {iso_close} >= datetime('now', '-7 days')"
         elif time_filter == 'month':
-            date_condition = "AND close_date >= datetime('now', '-30 days')"
+            date_condition = f"AND {iso_close} >= datetime('now', '-30 days')"
         elif time_filter == 'quarter':
-            date_condition = "AND close_date >= datetime('now', '-90 days')"
+            date_condition = f"AND {iso_close} >= datetime('now', '-90 days')"
         elif time_filter == 'ytd':
-            date_condition = f"AND close_date >= '{datetime.now().year}-01-01'"
+            date_condition = f"AND {iso_close} >= '{datetime.now().year}-01-01'"
         
         # Build direction filter
         direction_condition = ""
@@ -384,10 +393,10 @@ def get_performance():
         cursor.execute(f'''
             SELECT rowid, pair, direction, trade_type, entry_price, result, 
                    initial_risk_reward, final_risk_reward, entry_date, close_date
-            FROM trades 
+            FROM trades
             WHERE UPPER(status) = 'CLOSED' AND result IS NOT NULL
             {date_condition} {direction_condition}
-            ORDER BY close_date DESC
+            ORDER BY {iso_close} DESC
             LIMIT 20
         ''')
         
@@ -567,22 +576,81 @@ def clear_signals():
 # ============================================================================
 
 import subprocess
-import signal
+import sys
+import signal as os_signal
 
-# Global variable to track bot process
-bot_process = None
+# systemd unit that runs bot_runner.py in production (override via .env if the
+# unit has a different name on the server, e.g. BOT_SERVICE=mp-dh415-bot)
+BOT_SERVICE = os.getenv('BOT_SERVICE', 'trading-bot')
+BOT_SERVICE_UNIT = Path(f'/etc/systemd/system/{BOT_SERVICE}.service')
+
+# Best-effort start time; the source of truth for "running" is the process list,
+# because with multiple gunicorn workers each worker has its own globals.
 bot_start_time = None
+
+
+def _find_bot_pids():
+    """Return PIDs of any running bot_runner.py, no matter who started it."""
+    try:
+        result = subprocess.run(
+            ['pgrep', '-f', r'bot_runner\.py'],
+            capture_output=True, text=True, timeout=10
+        )
+        return [int(pid) for pid in result.stdout.split()]
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+
+
+def _systemctl_bot(action):
+    """Start/stop the systemd bot service. Requires the passwordless sudo rule
+    installed by deploy/gcp_setup.sh. Returns True on success."""
+    try:
+        result = subprocess.run(
+            ['sudo', '-n', 'systemctl', action, BOT_SERVICE],
+            capture_output=True, text=True, timeout=30
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _add_system_log(log_type, message, pair=None):
+    """Write an entry to activity_logs (creating the table if needed)."""
+    conn = get_activity_logs_connection()
+    if not conn:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                pair TEXT,
+                details TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('''
+            INSERT INTO activity_logs (timestamp, type, message, pair)
+            VALUES (?, ?, ?, ?)
+        ''', (timestamp, log_type, message, pair))
+        conn.commit()
+    finally:
+        conn.close()
+
 
 @app.route('/api/bot/status', methods=['GET'])
 def get_bot_status():
-    """Get current bot status"""
-    global bot_process, bot_start_time
-    
-    is_running = bot_process is not None and bot_process.poll() is None
-    
+    """Get current bot status (based on the process list, works across workers)"""
+    pids = _find_bot_pids()
+    is_running = len(pids) > 0
+
     return jsonify({
         'status': 'running' if is_running else 'stopped',
-        'pid': bot_process.pid if is_running else None,
+        'pid': pids[0] if is_running else None,
         'simulationMode': os.getenv('SIMULATION_MODE', 'True') == 'True',
         'startTime': bot_start_time.isoformat() if bot_start_time and is_running else None,
     })
@@ -591,7 +659,7 @@ def get_bot_status():
 @app.route('/api/bot/start', methods=['POST'])
 def start_bot():
     """Start the trading bot (no-op on Render: use Background Worker instead)"""
-    global bot_process, bot_start_time
+    global bot_start_time
 
     if os.getenv('RENDER'):
         return jsonify({
@@ -599,88 +667,67 @@ def start_bot():
             'error': 'On Render the bot runs as a Background Worker; start/stop is not available from the UI.'
         }), 503
 
-    # Check if bot is already running
-    if bot_process is not None and bot_process.poll() is None:
+    if _find_bot_pids():
         return jsonify({
             'success': False,
             'error': 'Bot is already running',
-            'pid': bot_process.pid
+            'pid': _find_bot_pids()[0]
         }), 400
-    
-    # Get configuration from request or env
+
     data = request.json or {}
     pair = data.get('pair', os.getenv('ACTIVE_PAIRS', 'EUR/USD').split(',')[0])
-    
-    # Get FXCM credentials
+
     login_id = os.getenv('FXCM_LOGIN_ID', '')
     password = os.getenv('FXCM_PASSWORD', '')
-    url = os.getenv('FXCM_URL', 'http://www.fxcorporate.com/Hosts.jsp')
-    connection = os.getenv('FXCM_CONNECTION', 'Demo')
-    
+
     if not login_id or not password:
         return jsonify({
             'success': False,
             'error': 'FXCM credentials not configured'
         }), 400
-    
-    # Build command - use bot_runner.py for continuous scanning
-    bot_script = Path(__file__).resolve().parent.parent.parent / 'backend' / 'bot_runner.py'
-    python_path = '/opt/homebrew/bin/python3.10'
-    
-    # Get scan interval from request or default to 60 seconds
-    interval = data.get('interval', 60)
-    
-    cmd = [
-        python_path,
-        str(bot_script),
-        '--interval', str(interval)
-    ]
-    
-    # Add specific pairs if provided
-    if data.get('pairs'):
-        cmd.extend(['--pairs', data.get('pairs')])
-    
+
     try:
-        # Add activity log
-        conn = get_activity_logs_connection()
-        if conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS activity_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    pair TEXT,
-                    details TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('''
-                INSERT INTO activity_logs (timestamp, type, message, pair)
-                VALUES (?, ?, ?, ?)
-            ''', (timestamp, 'SYSTEM', f'Starting bot for {pair}...', pair))
-            conn.commit()
-            conn.close()
-        
-        # Start bot process
-        bot_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=str(bot_script.parent),
-            text=True,
-            bufsize=1
-        )
+        _add_system_log('SYSTEM', f'Starting bot for {pair}...', pair)
+
+        # Production (GCP VM): the bot is managed by systemd
+        if BOT_SERVICE_UNIT.exists() and _systemctl_bot('start'):
+            bot_start_time = datetime.now()
+            time.sleep(1)
+            pids = _find_bot_pids()
+            return jsonify({
+                'success': True,
+                'message': f'Bot service started ({BOT_SERVICE})',
+                'pid': pids[0] if pids else None
+            })
+
+        # Development / fallback: spawn bot_runner.py with the same interpreter
+        # that runs this API (venv-aware, works on macOS and Linux)
+        bot_script = _REPO_ROOT / 'backend' / 'bot_runner.py'
+        interval = data.get('interval', 60)
+
+        cmd = [sys.executable, str(bot_script), '--interval', str(interval)]
+        if data.get('pairs'):
+            cmd.extend(['--pairs', data.get('pairs')])
+
+        # stdout goes to a log file: with PIPE nobody drains the buffer and the
+        # bot would eventually block on a full pipe
+        log_path = bot_script.parent / 'bot_runner.py.log'
+        with open(log_path, 'ab') as log_file:
+            process = subprocess.Popen(
+                cmd,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                cwd=str(bot_script.parent),
+                start_new_session=True
+            )
         bot_start_time = datetime.now()
-        
+
         return jsonify({
             'success': True,
             'message': f'Bot started for {pair}',
-            'pid': bot_process.pid
+            'pid': process.pid
         })
-        
+
     except Exception as e:
         return jsonify({
             'success': False,
@@ -691,7 +738,7 @@ def start_bot():
 @app.route('/api/bot/stop', methods=['POST'])
 def stop_bot():
     """Stop the trading bot (no-op on Render: use Background Worker instead)"""
-    global bot_process, bot_start_time
+    global bot_start_time
 
     if os.getenv('RENDER'):
         return jsonify({
@@ -699,56 +746,45 @@ def stop_bot():
             'error': 'On Render the bot runs as a Background Worker; start/stop is not available from the UI.'
         }), 503
 
-    if bot_process is None or bot_process.poll() is not None:
+    pids = _find_bot_pids()
+    if not pids:
         return jsonify({
             'success': False,
             'error': 'Bot is not running'
         }), 400
-    
+
     try:
-        # Add activity log
-        conn = get_activity_logs_connection()
-        if conn:
-            cursor = conn.cursor()
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('''
-                INSERT INTO activity_logs (timestamp, type, message)
-                VALUES (?, ?, ?)
-            ''', (timestamp, 'WARNING', 'Stop signal received...'))
-            conn.commit()
-            conn.close()
-        
-        # Terminate the process
-        bot_process.terminate()
-        
-        # Wait a bit for graceful shutdown
-        try:
-            bot_process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            # Force kill if it doesn't stop
-            bot_process.kill()
-            bot_process.wait()
-        
-        # Add stopped log
-        conn = get_activity_logs_connection()
-        if conn:
-            cursor = conn.cursor()
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute('''
-                INSERT INTO activity_logs (timestamp, type, message)
-                VALUES (?, ?, ?)
-            ''', (timestamp, 'SYSTEM', 'Trading bot stopped'))
-            conn.commit()
-            conn.close()
-        
-        bot_process = None
+        _add_system_log('WARNING', 'Stop signal received...')
+
+        # Production (GCP VM): stop via systemd so it does not get restarted
+        stopped_via_service = BOT_SERVICE_UNIT.exists() and _systemctl_bot('stop')
+
+        if not stopped_via_service:
+            # SIGTERM triggers bot_runner's graceful shutdown; SIGKILL as last resort
+            for pid in pids:
+                try:
+                    os.kill(pid, os_signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+            deadline = time.time() + 10
+            while _find_bot_pids() and time.time() < deadline:
+                time.sleep(0.5)
+
+            for pid in _find_bot_pids():
+                try:
+                    os.kill(pid, os_signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+        _add_system_log('SYSTEM', 'Trading bot stopped')
         bot_start_time = None
-        
+
         return jsonify({
             'success': True,
             'message': 'Bot stopped successfully'
         })
-        
+
     except Exception as e:
         return jsonify({
             'success': False,

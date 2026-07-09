@@ -277,7 +277,7 @@ def main():
                                                     log_trade_signal(str_instrument, 'LONG', 
                                                                    trade_setup[-1]['entry_price'], 
                                                                    trade_setup[-1]['stop_loss_price'],
-                                                                   trade_setup[-1]['target'], 
+                                                                   trade_setup[-1]['target_price'],
                                                                    trade_setup[-1]['risk_reward'])
                                                     log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
                                                     add_activity_log('SUCCESS', f'{str_instrument}: LONG signal created - Entry: {round(fib_78_6, 5)}, SL: {round(stop_loss_price, 5)}, R:R: {round(risk_reward, 2)}', pair=str_instrument)
@@ -345,7 +345,7 @@ def main():
                                                         log_trade_signal(str_instrument, 'LONG', 
                                                                        trade_setup[-1]['entry_price'], 
                                                                        trade_setup[-1]['stop_loss_price'],
-                                                                       trade_setup[-1]['target'], 
+                                                                       trade_setup[-1]['target_price'],
                                                                        trade_setup[-1]['risk_reward'])
                                                         log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
                                                         add_activity_log('SUCCESS', f'{str_instrument}: LONG signal updated - Entry: {round(fib_78_6, 5)}, R:R: {round(risk_reward, 2)}', pair=str_instrument)
@@ -461,7 +461,7 @@ def main():
                                                     log_trade_signal(str_instrument, 'SHORT', 
                                                                    trade_setup[-1]['entry_price'], 
                                                                    trade_setup[-1]['stop_loss_price'],
-                                                                   trade_setup[-1]['target'], 
+                                                                   trade_setup[-1]['target_price'],
                                                                    trade_setup[-1]['risk_reward'])
                                                     log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
                                                     add_activity_log('SUCCESS', f'{str_instrument}: SHORT signal created - Entry: {round(fib_78_6, 5)}, SL: {round(stop_loss_price, 5)}, R:R: {round(risk_reward, 2)}', pair=str_instrument)
@@ -527,7 +527,7 @@ def main():
                                                         log_trade_signal(str_instrument, 'SHORT', 
                                                                        trade_setup[-1]['entry_price'], 
                                                                        trade_setup[-1]['stop_loss_price'],
-                                                                       trade_setup[-1]['target'], 
+                                                                       trade_setup[-1]['target_price'],
                                                                        trade_setup[-1]['risk_reward'])
                                                         log_retest_waiting(str_instrument, trade_setup[-1]['entry_price'])
                                                         add_activity_log('SUCCESS', f'{str_instrument}: SHORT signal updated - Entry: {round(fib_78_6, 5)}, R:R: {round(risk_reward, 2)}', pair=str_instrument)
@@ -567,7 +567,7 @@ def main():
                             
                                 
                     if len(watchlist) != 0:
-                        send_slack_message('mt-bot',watchlist[-1])
+                        send_slack_message(os.getenv('SLACK_CHANNEL', 'mt-bot'), watchlist[-1])
                 
                 #close mt5 orders already processed
                 clean_trades()

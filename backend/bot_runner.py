@@ -19,7 +19,7 @@ load_dotenv()
 
 # Import logging functions
 from db_utils import (
-    initialize_activity_logs_db, initialize_signals_db,
+    initialize_db, initialize_activity_logs_db, initialize_signals_db,
     add_activity_log, SIMULATION_MODE
 )
 
@@ -117,7 +117,9 @@ def main():
     
     args = parse_args()
     
-    # Initialize databases
+    # Initialize databases (trades table included: on a fresh deploy the
+    # SQLite file does not exist because *.db is gitignored)
+    initialize_db()
     initialize_activity_logs_db()
     if SIMULATION_MODE:
         initialize_signals_db()
