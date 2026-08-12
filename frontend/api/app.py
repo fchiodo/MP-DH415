@@ -1380,6 +1380,263 @@ def get_backtest_trades():
 
 
 # ============================================================================
+# BACKTEST RUNNER ENDPOINTS
+# ============================================================================
+# Launch/stop/monitor backend/backtest_runner.py, which drives the
+# MP-DH415-BT engine (martina_BT.py) pair by pair. Progress is logged to the
+# backtest_logs table (same shape as activity_logs) and streamed via SSE.
+
+BACKTEST_ENGINE_DIR = Path(os.getenv('BACKTEST_ENGINE_DIR', str(_REPO_ROOT.parent / 'MP-DH415-BT')))
+_PAIR_RE = re.compile(r'^[A-Z]{3}/[A-Z]{3}$')
+
+
+def _find_backtest_runner_pids():
+    """Return PIDs of any running backtest_runner.py."""
+    try:
+        result = subprocess.run(
+            ['pgrep', '-f', r'backtest_runner\.py'],
+            capture_output=True, text=True, timeout=10
+        )
+        return [int(pid) for pid in result.stdout.split()]
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+
+
+def _ensure_backtest_logs_table(cursor):
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS backtest_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            pair TEXT,
+            details TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+
+def _add_backtest_log(log_type, message, pair=None):
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        _ensure_backtest_logs_table(cursor)
+        cursor.execute('''
+            INSERT INTO backtest_logs (timestamp, type, message, pair)
+            VALUES (?, ?, ?, ?)
+        ''', (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), log_type, message, pair))
+        conn.commit()
+        conn.close()
+    except sqlite3.Error:
+        pass
+
+
+@app.route('/api/backtest/run', methods=['POST'])
+def start_backtest():
+    """Start a backtest run: {year: 2024, pairs: [...], clean: bool}
+    (or explicit datefrom/dateto in 'MM.DD.YYYY HH:MM:SS' format)."""
+    data = request.json or {}
+
+    pairs = data.get('pairs') or []
+    if not isinstance(pairs, list) or not pairs:
+        return jsonify({'success': False, 'error': 'Select at least one pair'}), 400
+    invalid = [p for p in pairs if not isinstance(p, str) or not _PAIR_RE.match(p)]
+    if invalid:
+        return jsonify({'success': False, 'error': f'Invalid pairs: {invalid}'}), 400
+
+    if data.get('datefrom') and data.get('dateto'):
+        datefrom, dateto = data['datefrom'], data['dateto']
+        try:
+            datetime.strptime(datefrom, '%m.%d.%Y %H:%M:%S')
+            datetime.strptime(dateto, '%m.%d.%Y %H:%M:%S')
+        except ValueError:
+            return jsonify({'success': False,
+                            'error': 'Dates must be in MM.DD.YYYY HH:MM:SS format'}), 400
+    else:
+        try:
+            year = int(data.get('year'))
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Provide a year or a date range'}), 400
+        if not 2010 <= year <= datetime.now().year:
+            return jsonify({'success': False, 'error': f'Year out of range: {year}'}), 400
+        datefrom = f'01.01.{year} 00:00:00'
+        dateto = f'12.31.{year} 23:00:00'
+
+    if not (BACKTEST_ENGINE_DIR / 'martina_BT.py').exists():
+        return jsonify({
+            'success': False,
+            'error': f'Backtest engine not found in {BACKTEST_ENGINE_DIR} '
+                     '(set BACKTEST_ENGINE_DIR or install the MP-DH415-BT project there)'
+        }), 400
+
+    if not os.getenv('FXCM_LOGIN_ID') or not os.getenv('FXCM_PASSWORD'):
+        return jsonify({'success': False,
+                        'error': 'FXCM credentials not configured (Settings page)'}), 400
+
+    if _find_backtest_runner_pids():
+        return jsonify({'success': False, 'error': 'A backtest is already running'}), 400
+
+    try:
+        runner = _REPO_ROOT / 'backend' / 'backtest_runner.py'
+        cmd = [sys.executable, str(runner),
+               '--pairs', ','.join(pairs),
+               '--datefrom', datefrom,
+               '--dateto', dateto]
+        if data.get('clean', False):
+            cmd.append('--clean')
+
+        log_path = runner.parent / 'backtest_runner.py.log'
+        with open(log_path, 'ab') as log_file:
+            process = subprocess.Popen(
+                cmd,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                cwd=str(runner.parent),
+                start_new_session=True
+            )
+        return jsonify({'success': True,
+                        'message': f'Backtest started on {len(pairs)} pair(s)',
+                        'pid': process.pid})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/backtest/run/status', methods=['GET'])
+def get_backtest_run_status():
+    pids = _find_backtest_runner_pids()
+    return jsonify({
+        'running': len(pids) > 0,
+        'pid': pids[0] if pids else None,
+    })
+
+
+@app.route('/api/backtest/run/stop', methods=['POST'])
+def stop_backtest():
+    """Stop the running backtest (SIGTERM to the runner's process group,
+    so the engine subprocess is terminated too)."""
+    pids = _find_backtest_runner_pids()
+    if not pids:
+        return jsonify({'success': False, 'error': 'No backtest is running'}), 400
+
+    try:
+        _add_backtest_log('WARNING', 'Stop signal received...')
+        for pid in pids:
+            try:
+                os.killpg(pid, os_signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    os.kill(pid, os_signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+        deadline = time.time() + 15
+        while _find_backtest_runner_pids() and time.time() < deadline:
+            time.sleep(0.5)
+
+        for pid in _find_backtest_runner_pids():
+            try:
+                os.killpg(pid, os_signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    os.kill(pid, os_signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+        _add_backtest_log('SYSTEM', 'Backtest stopped')
+        return jsonify({'success': True, 'message': 'Backtest stopped'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/backtest/logs', methods=['GET'])
+def get_backtest_logs():
+    """Recent backtest logs (newest first)."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        _ensure_backtest_logs_table(cursor)
+        limit = int(request.args.get('limit', 100))
+        cursor.execute('''
+            SELECT id, timestamp, type, message, pair, details
+            FROM backtest_logs
+            ORDER BY id DESC
+            LIMIT ?
+        ''', (limit,))
+        logs = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return jsonify({'logs': logs})
+    except sqlite3.Error as e:
+        return jsonify({'logs': [], 'error': str(e)})
+
+
+@app.route('/api/backtest/logs/stream')
+def stream_backtest_logs():
+    """SSE stream of new backtest logs (same protocol as /api/logs/stream)."""
+    def generate():
+        last_id = 0
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            cursor = conn.cursor()
+            _ensure_backtest_logs_table(cursor)
+            conn.commit()
+            cursor.execute('SELECT MAX(id) FROM backtest_logs')
+            result = cursor.fetchone()
+            last_id = result[0] if result[0] else 0
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+        yield f"data: {json.dumps({'type': 'connected', 'lastId': last_id})}\n\n"
+
+        while True:
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, timestamp, type, message, pair, details
+                    FROM backtest_logs
+                    WHERE id > ?
+                    ORDER BY id ASC
+                ''', (last_id,))
+                for row in cursor.fetchall():
+                    yield f"data: {json.dumps(dict(row))}\n\n"
+                    last_id = row['id']
+                conn.close()
+            except sqlite3.OperationalError:
+                pass
+            except GeneratorExit:
+                break
+            time.sleep(0.5)
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+            'Access-Control-Allow-Origin': '*'
+        }
+    )
+
+
+@app.route('/api/backtest/logs/clear', methods=['POST'])
+def clear_backtest_logs():
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cursor = conn.cursor()
+        _ensure_backtest_logs_table(cursor)
+        cursor.execute('DELETE FROM backtest_logs')
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except sqlite3.Error as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 

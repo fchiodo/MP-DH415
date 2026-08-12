@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import StatsCard from '../components/common/StatsCard'
 import Button from '../components/common/Button'
+import RunBacktestModal from '../components/backtest/RunBacktestModal'
+import BacktestActivityLog from '../components/backtest/BacktestActivityLog'
 import { API_URL } from '../config'
 
 const PAGE_SIZE = 50
@@ -58,6 +60,13 @@ function Backtest() {
   const [pairs, setPairs] = useState([])
   const [stats, setStats] = useState(null)
 
+  // Backtest runner
+  const [showRunModal, setShowRunModal] = useState(false)
+  const [showStopConfirm, setShowStopConfirm] = useState(false)
+  const [backtestRunning, setBacktestRunning] = useState(false)
+  const prevRunningRef = useRef(false)
+  const runPollCountRef = useRef(0)
+
   const directionTabs = [
     { id: 'all', label: 'All Trades' },
     { id: 'LONG', label: 'Long Only' },
@@ -88,27 +97,27 @@ function Backtest() {
     return params
   }, [selectedDb, pairFilter, directionTab, resultFilter, typeFilter])
 
-  // Load list of available backtest databases (once)
-  useEffect(() => {
-    const fetchDatabases = async () => {
-      try {
-        const response = await fetch(`${API_URL}/api/backtest/databases`)
-        const data = await response.json()
-        const dbs = data.databases || []
-        setDatabases(dbs)
-        if (dbs.length > 0) {
-          setSelectedDb(dbs[0].name)
-        } else {
-          setIsLoading(false)
-        }
-      } catch (err) {
-        console.error('Error fetching backtest databases:', err)
-        setError('Cannot reach the API server')
-        setIsLoading(false)
-      }
+  // Load / refresh the list of available backtest databases
+  const refreshDatabases = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/backtest/databases`)
+      const data = await response.json()
+      const dbs = data.databases || []
+      setDatabases(dbs)
+      setSelectedDb((prev) =>
+        prev && dbs.some((d) => d.name === prev) ? prev : (dbs[0]?.name || null)
+      )
+      if (dbs.length === 0) setIsLoading(false)
+    } catch (err) {
+      console.error('Error fetching backtest databases:', err)
+      setError('Cannot reach the API server')
+      setIsLoading(false)
     }
-    fetchDatabases()
   }, [])
+
+  useEffect(() => {
+    refreshDatabases()
+  }, [refreshDatabases])
 
   // Load trades whenever db / filters / page change
   const fetchTrades = useCallback(async () => {
@@ -136,6 +145,84 @@ function Backtest() {
   useEffect(() => {
     fetchTrades()
   }, [fetchTrades])
+
+  // Poll runner status: refresh data periodically while running and once when it finishes
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/backtest/run/status`)
+        const data = await response.json()
+        if (cancelled) return
+        const running = !!data.running
+        setBacktestRunning(running)
+        if (running) {
+          runPollCountRef.current += 1
+          if (runPollCountRef.current % 5 === 0) {
+            refreshDatabases()
+            fetchTrades()
+          }
+        } else if (prevRunningRef.current) {
+          refreshDatabases()
+          fetchTrades()
+        }
+        prevRunningRef.current = running
+      } catch {
+        // API unreachable: keep last known state
+      }
+    }
+    poll()
+    const id = setInterval(poll, 4000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [refreshDatabases, fetchTrades])
+
+  const stopBacktest = async () => {
+    try {
+      await fetch(`${API_URL}/api/backtest/run/stop`, { method: 'POST' })
+    } catch (err) {
+      console.error('Error stopping backtest:', err)
+    } finally {
+      setShowStopConfirm(false)
+    }
+  }
+
+  const onBacktestStarted = () => {
+    runPollCountRef.current = 0
+    prevRunningRef.current = true
+    setBacktestRunning(true)
+  }
+
+  // Stop confirmation modal (same pattern as the Signals page clear confirm)
+  const stopConfirmModal = showStopConfirm && (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white dark:bg-[#192633] rounded-xl p-6 max-w-md mx-4 shadow-2xl border border-slate-200 dark:border-[#324d67]">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-500/20 flex items-center justify-center">
+            <span className="material-symbols-outlined text-red-500">stop_circle</span>
+          </div>
+          <h3 className="text-lg font-bold text-slate-900 dark:text-white">Stop Backtest?</h3>
+        </div>
+        <p className="text-slate-600 dark:text-slate-400 mb-6">
+          The current pair will be interrupted and the remaining pairs skipped.
+          Trades already saved are kept.
+        </p>
+        <div className="flex gap-3 justify-end">
+          <button
+            onClick={() => setShowStopConfirm(false)}
+            className="px-4 py-2 rounded-lg text-sm font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-[#233648] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={stopBacktest}
+            className="px-4 py-2 rounded-lg text-sm font-bold bg-red-500 text-white hover:bg-red-600 transition-colors"
+          >
+            Yes, Stop
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 
   // Reset pagination when any filter changes
   const selectDb = (name) => { setSelectedDb(name); setPairFilter('all'); setPage(0) }
@@ -263,21 +350,40 @@ function Backtest() {
   if (!isLoading && databases.length === 0) {
     return (
       <div className="flex flex-col gap-6">
-        <div className="flex min-w-72 flex-col gap-1 mb-2">
-          <h1 className="text-slate-900 dark:text-white text-2xl font-extrabold leading-tight">Backtest Results</h1>
-          <p className="text-slate-500 dark:text-[#92adc9] text-sm font-normal leading-normal">
-            Historical trades generated by the MP-DH415-BT backtesting engine.
-          </p>
+        <div className="flex flex-wrap justify-between items-end gap-3 mb-2">
+          <div className="flex min-w-72 flex-col gap-1">
+            <h1 className="text-slate-900 dark:text-white text-2xl font-extrabold leading-tight">Backtest Results</h1>
+            <p className="text-slate-500 dark:text-[#92adc9] text-sm font-normal leading-normal">
+              Historical trades generated by the MP-DH415-BT backtesting engine.
+            </p>
+          </div>
+          {backtestRunning ? (
+            <Button variant="danger" icon="stop_circle" onClick={() => setShowStopConfirm(true)}>
+              Stop Backtest
+            </Button>
+          ) : (
+            <Button variant="primary" icon="rocket_launch" onClick={() => setShowRunModal(true)}>
+              Run Backtest
+            </Button>
+          )}
         </div>
         <div className="bg-white dark:bg-[#111a22] border border-slate-200 dark:border-[#324d67] rounded-xl p-10 flex flex-col items-center gap-3 text-center">
           <span className="material-symbols-outlined text-5xl text-slate-400">database_off</span>
           <h3 className="font-bold text-lg">No backtest database found</h3>
           <p className="text-sm text-slate-500 dark:text-[#92adc9] max-w-md">
-            Copy the backtest .db files (e.g. my_database_2024.db) into the <span className="font-mono">backtest/</span> folder
-            in the repository root, or set the <span className="font-mono">BACKTEST_DB_DIR</span> environment variable, then reload this page.
+            Run a backtest with the button above (results will appear here as the Latest database),
+            copy the backtest .db files (e.g. my_database_2024.db) into the <span className="font-mono">backtest/</span> folder
+            in the repository root, or set the <span className="font-mono">BACKTEST_DB_DIR</span> environment variable.
           </p>
           {error && <p className="text-sm text-rose-500">{error}</p>}
         </div>
+        <BacktestActivityLog />
+        <RunBacktestModal
+          isOpen={showRunModal}
+          onClose={() => setShowRunModal(false)}
+          onStarted={onBacktestStarted}
+        />
+        {stopConfirmModal}
       </div>
     )
   }
@@ -287,16 +393,35 @@ function Backtest() {
       {/* Page Header */}
       <div className="flex flex-wrap justify-between items-end gap-3 mb-2">
         <div className="flex min-w-72 flex-col gap-1">
-          <h1 className="text-slate-900 dark:text-white text-2xl font-extrabold leading-tight">
-            Backtest Results
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-slate-900 dark:text-white text-2xl font-extrabold leading-tight">
+              Backtest Results
+            </h1>
+            {backtestRunning && (
+              <span className="inline-flex items-center gap-1.5 bg-primary/10 text-primary text-xs font-bold px-2.5 py-1 rounded-full uppercase">
+                <span className="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+                Running
+              </span>
+            )}
+          </div>
           <p className="text-slate-500 dark:text-[#92adc9] text-sm font-normal leading-normal">
             Historical trades generated by the MP-DH415-BT backtesting engine.
           </p>
         </div>
-        <Button variant="primary" icon="download" onClick={exportToCSV} disabled={isLoading || trades.length === 0}>
-          Export CSV
-        </Button>
+        <div className="flex gap-3 items-center">
+          {backtestRunning ? (
+            <Button variant="danger" icon="stop_circle" onClick={() => setShowStopConfirm(true)}>
+              Stop Backtest
+            </Button>
+          ) : (
+            <Button variant="primary" icon="rocket_launch" onClick={() => setShowRunModal(true)}>
+              Run Backtest
+            </Button>
+          )}
+          <Button variant="outline" icon="download" onClick={exportToCSV} disabled={isLoading || trades.length === 0}>
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {/* Database selector */}
@@ -484,6 +609,16 @@ function Backtest() {
           </div>
         )}
       </div>
+
+      {/* Backtest Activity Log */}
+      <BacktestActivityLog />
+
+      <RunBacktestModal
+        isOpen={showRunModal}
+        onClose={() => setShowRunModal(false)}
+        onStarted={onBacktestStarted}
+      />
+      {stopConfirmModal}
     </div>
   )
 }
