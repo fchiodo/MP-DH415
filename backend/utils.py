@@ -241,19 +241,19 @@ def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate, str_instru
                 if i >= 2 and history[i+2]['BidClose'] > history[i+1]['BidClose']:
                     minlow = min(history[i+1]['BidLow'], history[i]['BidLow'], history[i-1]['BidLow'])
                     
-                    if i >= 3 and history[i+3]['BidClose'] > history[i+2]['BidClose']:
+                    if i >= 3 and i + 3 <= index and history[i+3]['BidClose'] > history[i+2]['BidClose']:
                         minlow = min(history[i+2]['BidLow'], minlow)
                         
-                        if i >= 4 and history[i+4]['BidClose'] > history[i+3]['BidClose']:
+                        if i >= 4 and i + 4 <= index and history[i+4]['BidClose'] > history[i+3]['BidClose']:
                             minlow = min(history[i+3]['BidLow'], minlow)
                             
-                            if i >= 5 and history[i+5]['BidClose'] > history[i+4]['BidClose']:
+                            if i >= 5 and i + 5 <= index and history[i+5]['BidClose'] > history[i+4]['BidClose']:
                                 minlow = min(history[i+4]['BidLow'], minlow)
                                 
-                                if i >= 6 and history[i+6]['BidClose'] > history[i+5]['BidClose']:
+                                if i >= 6 and i + 6 <= index and history[i+6]['BidClose'] > history[i+5]['BidClose']:
                                     minlow = min(history[i+5]['BidLow'], minlow)
                                     
-                                    if i >= 7 and history[i+7]['BidClose'] > history[i+6]['BidClose']:
+                                    if i >= 7 and i + 7 <= index and history[i+7]['BidClose'] > history[i+6]['BidClose']:
                                         minlow = min(history[i+6]['BidLow'], minlow)
                 
                 # Validazione con Kijun touch (come nel PineScript)
@@ -422,19 +422,19 @@ def get_resistences(history, index, session, timerange, dlyZoneDate, kijun_h4=No
             if i >= 2 and history[i+2]['BidClose'] < history[i+1]['BidClose']:
                 maxhigh = max(history[i+1]['BidHigh'], history[i]['BidHigh'], history[i-1]['BidHigh'])
                 
-                if i >= 3 and history[i+3]['BidClose'] < history[i+2]['BidClose']:
+                if i >= 3 and i + 3 <= index and history[i+3]['BidClose'] < history[i+2]['BidClose']:
                     maxhigh = max(history[i+2]['BidHigh'], maxhigh)
                     
-                    if i >= 4 and history[i+4]['BidClose'] < history[i+3]['BidClose']:
+                    if i >= 4 and i + 4 <= index and history[i+4]['BidClose'] < history[i+3]['BidClose']:
                         maxhigh = max(history[i+3]['BidHigh'], maxhigh)
                         
-                        if i >= 5 and history[i+5]['BidClose'] < history[i+4]['BidClose']:
+                        if i >= 5 and i + 5 <= index and history[i+5]['BidClose'] < history[i+4]['BidClose']:
                             maxhigh = max(history[i+4]['BidHigh'], maxhigh)
                             
-                            if i >= 6 and history[i+6]['BidClose'] < history[i+5]['BidClose']:
+                            if i >= 6 and i + 6 <= index and history[i+6]['BidClose'] < history[i+5]['BidClose']:
                                 maxhigh = max(history[i+5]['BidHigh'], maxhigh)
                                 
-                                if i >= 7 and history[i+7]['BidClose'] < history[i+6]['BidClose']:
+                                if i >= 7 and i + 7 <= index and history[i+7]['BidClose'] < history[i+6]['BidClose']:
                                     maxhigh = max(history[i+6]['BidHigh'], maxhigh)
             
             # Validazione con Kijun touch (come nel PineScript)
