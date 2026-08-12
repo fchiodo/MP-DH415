@@ -98,13 +98,19 @@ npm run lint     # ESLint 9
 
 ### Deploy GCP (produzione attuale)
 
+**Topologia reale sul server `34.171.150.136` (VM `mp-dh415-vm`)** — diversa da quella descritta in `docs/DEPLOY_GCP.md` e nei file `deploy/`:
+
+- Il repo servito è `/home/fabio_chiodo86/apps/MP-DH415` (utente `fabio_chiodo86`); la copia in `/home/fabiochiodo/MP-DH415` NON è usata da nginx/systemd.
+- Unit systemd: **`mp-dh415-api`** (gunicorn :5001) e **`mp-dh415-bot`** — non `flask-api`/`trading-bot` come nei file in `deploy/`.
+- nginx serve `frontend/dist` su :80 e :443 (certificato self-signed) con proxy `/api` → :5001.
+- **Buildare sempre con `VITE_API_URL=` (vuoto → URL relativi)**: `frontend/.env.production` sul server ora lo imposta già; un URL assoluto `https://…` rompe l'API nei browser che non hanno accettato il cert self-signed.
+- Si accede via SSH come `fabiochiodo` (chiave `google_compute_engine`), che ha sudo NOPASSWD; i comandi sul repo vanno eseguiti con `sudo -u fabio_chiodo86`.
+
 ```bash
-# Prima installazione: deploy/gcp_setup.sh (Ubuntu 22.04, e2-micro)
-# Aggiornamento:
-cd ~/MP-DH415 && git pull
-cd frontend && VITE_API_URL='' npm run build && cd ..
-sudo systemctl restart flask-api trading-bot
-journalctl -u trading-bot -f
+# Aggiornamento (dal server):
+sudo -u fabio_chiodo86 bash -c 'cd /home/fabio_chiodo86/apps/MP-DH415 && git pull && cd frontend && npm run build'
+sudo systemctl restart mp-dh415-api
+journalctl -u mp-dh415-api -f
 ```
 
 ## Architettura
@@ -128,7 +134,7 @@ Slack (notifiche) ────────────────────�
 - **`backend/bot_runner.py`** — runner continuo: legge `ACTIVE_PAIRS` dal `.env` e lancia `martina.py` per ogni coppia via subprocess (timeout 120 s). Nessun cron/celery: lo scheduling è questo loop.
 - **`backend/utils.py`** — tutta la logica di analisi (zone, validazione Kijun, pattern M15, Fibonacci, stop loss, risk/reward, gestione trade).
 - **`backend/db_utils.py`** — persistenza SQLite + wrapper MT5 + Slack + sizing. Qui vivono `DB_PATH` (root del repo), gli schemi tabelle (`trades`, `activity_logs`, `mt5_signals`/`mt5_modifications`/`mt5_closures`) e la costante `SIMULATION_MODE`.
-- **`frontend/api/app.py`** — API Flask (porta 5001): config (legge/scrive il `.env`), trades, performance, signals, start/stop bot, log con streaming **SSE** su `/api/logs/stream`. Lo stato "running" del bot è determinato con `pgrep -f 'bot_runner\.py'`, non da variabili globali (più worker gunicorn). Include anche gli endpoint **`/api/backtest/*`** (pagina "Backtest" della UI): lettura read-only dei DB SQLite prodotti da MP-DH415-BT, cercati in `$BACKTEST_DB_DIR`, poi `backtest/` nella root del repo, poi `../MP-DH415-BT/` (vedi `backtest/README.md`; sul server GCP i `.db` vanno copiati a mano perché gitignorati).
+- **`frontend/api/app.py`** — API Flask (porta 5001): config (legge/scrive il `.env`), trades, performance, signals, start/stop bot, log con streaming **SSE** su `/api/logs/stream`. Lo stato "running" del bot è determinato con `pgrep -f 'bot_runner\.py'`, non da variabili globali (più worker gunicorn). Include anche gli endpoint **`/api/backtest/*`** (pagina "Backtest" della UI): lettura read-only dei DB SQLite prodotti da MP-DH415-BT, cercati in `$BACKTEST_DB_DIR`, poi `backtest/` nella root del repo, poi `../MP-DH415-BT/` (vedi `backtest/README.md`; sul server GCP i `.db` vanno copiati a mano in `/home/fabio_chiodo86/apps/MP-DH415/backtest/` perché gitignorati).
 - **Start/stop bot dall'API, tre livelli**: su Render → 503 (il bot è un Background Worker); se esiste l'unit systemd (`BOT_SERVICE`, default `trading-bot`) → `sudo -n systemctl start|stop`; altrimenti fallback dev → `subprocess.Popen(bot_runner.py)`.
 - **`frontend/src/config.js`** — unico punto di configurazione dell'URL API (`VITE_API_URL`; in produzione URL relativi dietro nginx). `context/AppContext.jsx` tiene lo stato globale (polling status ogni 5 s, log via `EventSource`).
 - **`backend/common_samples/`** — codice vendor Gehtsoft/FXCM (parsing argomenti CLI, session status, order monitor). **Non modificare.**
