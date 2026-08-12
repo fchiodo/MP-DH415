@@ -5,6 +5,7 @@ import PairDetail from './pages/PairDetail'
 import Settings from './pages/Settings'
 import Performance from './pages/Performance'
 import Simulation from './pages/Simulation'
+import Backtest from './pages/Backtest'
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
           <Route path="settings" element={<Settings />} />
           <Route path="performance" element={<Performance />} />
           <Route path="simulation" element={<Simulation />} />
+          <Route path="backtest" element={<Backtest />} />
         </Route>
       </Routes>
     </div>

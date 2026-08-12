@@ -8,6 +8,7 @@ from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 from dotenv import load_dotenv, set_key
 import os
+import re
 import sqlite3
 import json
 import time
@@ -1191,6 +1192,191 @@ def add_log():
         
     except sqlite3.Error as e:
         return jsonify({'success': False, 'error': str(e)})
+
+
+# ============================================================================
+# BACKTEST ENDPOINTS
+# ============================================================================
+# Read-only access to the SQLite databases produced by the MP-DH415-BT
+# backtesting engine (table `trades`). DB files are discovered in:
+#   1. $BACKTEST_DB_DIR (if set)
+#   2. <repo root>/backtest/          (drop .db files here on the server)
+#   3. ../MP-DH415-BT/                (sibling project, local dev)
+# On duplicate filenames the first directory wins.
+
+_BACKTEST_DB_DIRS = []
+if os.getenv('BACKTEST_DB_DIR'):
+    _BACKTEST_DB_DIRS.append(Path(os.getenv('BACKTEST_DB_DIR')))
+_BACKTEST_DB_DIRS.append(_REPO_ROOT / 'backtest')
+_BACKTEST_DB_DIRS.append(_REPO_ROOT.parent / 'MP-DH415-BT')
+
+# Columns as written by the backtester (martina_BT.py / db_utils.py).
+# Older yearly archives may miss the last two: they are selected as NULL.
+_BT_COLUMNS = [
+    'pair', 'status', 'trade_type', 'entry_date', 'close_date',
+    'entry_price', 'entry_price_index', 'stop_loss', 'target', 'direction',
+    'initial_risk_reward', 'final_risk_reward', 'profit', 'result',
+    'zones_rectX1_DLY', 'zones_rectY1_DLY', 'zones_rectY2_DLY',
+    'zones_rectX1_H4', 'zones_rectY1_H4', 'zones_rectY2_H4',
+    'pattern_x1', 'pattern_y1', 'pattern_y2',
+    'breakup_date', 'fibonacci100',
+]
+
+
+def find_backtest_dbs():
+    """Discover available backtest DB files. Returns {filename: Path}."""
+    dbs = {}
+    for directory in _BACKTEST_DB_DIRS:
+        if not directory.is_dir():
+            continue
+        for f in sorted(directory.glob('*.db')):
+            if f.name not in dbs:
+                dbs[f.name] = f
+    return dbs
+
+
+def _backtest_label(filename):
+    """my_database_2024.db -> '2024', my_database.db -> 'Latest'"""
+    match = re.search(r'(\d{4})', filename)
+    return match.group(1) if match else 'Latest'
+
+
+@app.route('/api/backtest/databases', methods=['GET'])
+def get_backtest_databases():
+    """List available backtest databases with basic info"""
+    databases = []
+    for name, path in find_backtest_dbs().items():
+        try:
+            conn = sqlite3.connect(path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*), COUNT(DISTINCT pair) FROM trades')
+            trades_count, pairs_count = cursor.fetchone()
+            conn.close()
+        except sqlite3.Error:
+            continue  # not a backtest DB, skip
+        databases.append({
+            'name': name,
+            'label': _backtest_label(name),
+            'trades': trades_count,
+            'pairs': pairs_count,
+        })
+    # 'Latest' first (letters sort after digits), then years descending
+    databases.sort(key=lambda d: d['label'], reverse=True)
+    return jsonify({'databases': databases})
+
+
+@app.route('/api/backtest/trades', methods=['GET'])
+def get_backtest_trades():
+    """Get backtest trades from a selected DB, with filters and pagination.
+
+    Query params: db (filename), pair, direction (LONG|SHORT),
+    result (TARGET|STOP LOSS), type (FULL|PARTIAL), status,
+    limit (default 50, max 20000), offset.
+    """
+    dbs = find_backtest_dbs()
+    if not dbs:
+        return jsonify({
+            'trades': [], 'total': 0, 'pairs': [], 'stats': None,
+            'message': 'No backtest database found. Put .db files in backtest/ or set BACKTEST_DB_DIR.',
+        })
+
+    db_name = request.args.get('db')
+    if db_name and db_name not in dbs:
+        return jsonify({'error': f'Unknown database: {db_name}'}), 404
+    if not db_name:
+        db_name = next(iter(dbs))
+
+    try:
+        limit = min(max(int(request.args.get('limit', 50)), 1), 20000)
+        offset = max(int(request.args.get('offset', 0)), 0)
+    except ValueError:
+        return jsonify({'error': 'limit/offset must be integers'}), 400
+
+    where, params = [], []
+    if request.args.get('pair'):
+        where.append('pair = ?')
+        params.append(request.args.get('pair'))
+    if request.args.get('direction'):
+        where.append('UPPER(direction) = ?')
+        params.append(request.args.get('direction').upper())
+    if request.args.get('result'):
+        where.append('UPPER(result) = ?')
+        params.append(request.args.get('result').upper())
+    if request.args.get('type'):
+        where.append('UPPER(trade_type) = ?')
+        params.append(request.args.get('type').upper())
+    if request.args.get('status'):
+        where.append('UPPER(status) = ?')
+        params.append(request.args.get('status').upper())
+    where_sql = ('WHERE ' + ' AND '.join(where)) if where else ''
+
+    try:
+        conn = sqlite3.connect(dbs[db_name])
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Older DBs miss some columns: select what exists, NULL the rest
+        cursor.execute('PRAGMA table_info(trades)')
+        existing = {row[1] for row in cursor.fetchall()}
+        select_cols = ', '.join(
+            f'"{c}"' if c in existing else f'NULL AS "{c}"' for c in _BT_COLUMNS
+        )
+
+        # Entry date can be empty for trades invalidated during retest:
+        # fall back to breakup_date for a stable chronological order
+        if 'breakup_date' in existing:
+            date_col = "COALESCE(NULLIF(entry_date, ''), breakup_date)"
+        else:
+            date_col = 'entry_date'
+        order_sql = f"ORDER BY {iso_date_expr(date_col)} DESC, rowid DESC"
+
+        cursor.execute(f'SELECT COUNT(*) FROM trades {where_sql}', params)
+        total = cursor.fetchone()[0]
+
+        cursor.execute(f'''
+            SELECT COUNT(*) AS n,
+                   SUM(CASE WHEN UPPER(result) = 'TARGET' THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN UPPER(result) = 'STOP LOSS' THEN 1 ELSE 0 END) AS losses,
+                   COALESCE(SUM(CAST(profit AS REAL)), 0) AS profit,
+                   COALESCE(AVG(CASE WHEN initial_risk_reward != ''
+                                     THEN CAST(initial_risk_reward AS REAL) END), 0) AS avg_rr
+            FROM trades {where_sql}
+        ''', params)
+        s = cursor.fetchone()
+        wins = s['wins'] or 0
+        losses = s['losses'] or 0
+        decided = wins + losses
+        stats = {
+            'totalTrades': total,
+            'wins': wins,
+            'losses': losses,
+            'winRate': round(wins * 100 / decided, 1) if decided else 0,
+            'totalProfitR': round(s['profit'], 2),
+            'avgRR': round(s['avg_rr'], 2),
+        }
+
+        cursor.execute('SELECT DISTINCT pair FROM trades ORDER BY pair')
+        pairs = [row['pair'] for row in cursor.fetchall()]
+
+        cursor.execute(f'''
+            SELECT rowid AS id, {select_cols}
+            FROM trades {where_sql} {order_sql}
+            LIMIT ? OFFSET ?
+        ''', params + [limit, offset])
+        trades = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return jsonify({
+            'db': db_name,
+            'trades': trades,
+            'total': total,
+            'limit': limit,
+            'offset': offset,
+            'pairs': pairs,
+            'stats': stats,
+        })
+    except sqlite3.Error as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ============================================================================

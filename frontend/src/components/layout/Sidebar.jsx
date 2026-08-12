@@ -9,6 +9,7 @@ function Sidebar() {
     { path: '/', label: 'Dashboard', icon: 'dashboard' },
     { path: '/performance', label: 'History', icon: 'history' },
     { path: '/simulation', label: 'Signals', icon: 'terminal' },
+    { path: '/backtest', label: 'Backtest', icon: 'science' },
     { path: '/settings', label: 'Settings', icon: 'settings' },
   ]
 
