@@ -1204,12 +1204,6 @@ def add_log():
 #   3. ../MP-DH415-BT/                (sibling project, local dev)
 # On duplicate filenames the first directory wins.
 
-_BACKTEST_DB_DIRS = []
-if os.getenv('BACKTEST_DB_DIR'):
-    _BACKTEST_DB_DIRS.append(Path(os.getenv('BACKTEST_DB_DIR')))
-_BACKTEST_DB_DIRS.append(_REPO_ROOT / 'backtest')
-_BACKTEST_DB_DIRS.append(_REPO_ROOT.parent / 'MP-DH415-BT')
-
 # Columns as written by the backtester (martina_BT.py / db_utils.py).
 # Older yearly archives may miss the last two: they are selected as NULL.
 _BT_COLUMNS = [
@@ -1224,14 +1218,33 @@ _BT_COLUMNS = [
 
 
 def find_backtest_dbs():
-    """Discover available backtest DB files. Returns {filename: Path}."""
+    """Discover available backtest DBs. Returns {name: Path}; earlier sources
+    win on duplicate names. Per-year working DBs written by backtest_runner.py
+    (backtest/years/<year>/my_database.db) are exposed as my_database_<year>.db
+    and take precedence over static archives with the same name."""
     dbs = {}
-    for directory in _BACKTEST_DB_DIRS:
-        if not directory.is_dir():
-            continue
-        for f in sorted(directory.glob('*.db')):
-            if f.name not in dbs:
-                dbs[f.name] = f
+
+    def add(name, path):
+        if name not in dbs:
+            dbs[name] = path
+
+    env_dir = os.getenv('BACKTEST_DB_DIR')
+    if env_dir and Path(env_dir).is_dir():
+        for f in sorted(Path(env_dir).glob('*.db')):
+            add(f.name, f)
+
+    years_dir = _REPO_ROOT / 'backtest' / 'years'
+    if years_dir.is_dir():
+        for d in sorted(years_dir.iterdir(), reverse=True):
+            db = d / 'my_database.db'
+            if d.is_dir() and re.fullmatch(r'\d{4}', d.name) and db.exists():
+                add(f'my_database_{d.name}.db', db)
+
+    for directory in (_REPO_ROOT / 'backtest', _REPO_ROOT.parent / 'MP-DH415-BT'):
+        if directory.is_dir():
+            for f in sorted(directory.glob('*.db')):
+                add(f.name, f)
+
     return dbs
 
 

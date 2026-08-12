@@ -186,10 +186,30 @@ function Backtest() {
     }
   }
 
-  const onBacktestStarted = () => {
+  const onBacktestStarted = (year) => {
     runPollCountRef.current = 0
     prevRunningRef.current = true
     setBacktestRunning(true)
+    // Il runner crea subito il DB dell'anno: appena appare, seleziona il suo tab
+    // così la tabella (inizialmente vuota) si popola durante il run
+    if (year) {
+      setTimeout(async () => {
+        try {
+          const response = await fetch(`${API_URL}/api/backtest/databases`)
+          const data = await response.json()
+          const dbs = data.databases || []
+          setDatabases(dbs)
+          const yearDb = `my_database_${year}.db`
+          if (dbs.some((d) => d.name === yearDb)) {
+            setSelectedDb(yearDb)
+            setPairFilter('all')
+            setPage(0)
+          }
+        } catch {
+          // il prossimo poll di stato riallineerà la lista
+        }
+      }, 2500)
+    }
   }
 
   // Stop confirmation modal (same pattern as the Signals page clear confirm)

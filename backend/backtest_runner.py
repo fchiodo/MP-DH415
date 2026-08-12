@@ -4,8 +4,10 @@ Esegue il motore di backtesting MP-DH415-BT (martina_BT.py) in sequenza sulle
 coppie richieste, loggando il progresso nella tabella backtest_logs del
 database live (esposta dalla UI via /api/backtest/logs).
 
-Il motore gira con cwd = directory del progetto BT, quindi scrive i risultati
-nel suo my_database.db: la UI lo espone come database "Latest".
+Il motore gira con cwd = backtest/years/<anno>/ nel repo: ogni anno ha il suo
+my_database.db dedicato, che la UI espone come tab "<anno>". Il DB viene
+creato dal runner con lo schema completo a 25 colonne (initialize_db() del
+progetto BT non è mai chiamata dal motore e ha comunque uno schema obsoleto).
 
 Uso:
   python backtest_runner.py --pairs "EUR/USD,GBP/USD" \
@@ -36,15 +38,35 @@ load_dotenv(_REPO_ROOT / '.env')
 DB_PATH = _REPO_ROOT / 'my_database.db'  # ospita la tabella backtest_logs
 ENGINE_DIR = Path(os.getenv('BACKTEST_ENGINE_DIR', str(_REPO_ROOT.parent / 'MP-DH415-BT')))
 ENGINE_PYTHON = os.getenv('BACKTEST_PYTHON', sys.executable)
-ENGINE_DB = ENGINE_DIR / 'my_database.db'
 ENGINE_OUTPUT_LOG = _REPO_ROOT / 'backtest' / 'engine_output.log'
+YEARS_DIR = _REPO_ROOT / 'backtest' / 'years'
 PAIR_TIMEOUT = int(os.getenv('BACKTEST_PAIR_TIMEOUT', 7200))
 HEARTBEAT_SECONDS = 60
 
 ERROR_MARKERS = ('Traceback', 'Exception', 'exception', 'LOGIN_FAILED', 'failed', 'Error:')
 
+# Schema reale della tabella trades (25 colonne): rispecchia i DB prodotti
+# storicamente dal motore. Gli INSERT di db_utils.py (BT) scrivono anche
+# breakup_date e fibonacci100, assenti dalla initialize_db() del progetto BT.
+TRADES_DDL = '''
+    CREATE TABLE IF NOT EXISTS trades (
+        "pair" TEXT, status TEXT, trade_type TEXT,
+        entry_date TEXT, close_date TEXT,
+        entry_price REAL, entry_price_index INTEGER,
+        stop_loss REAL, target REAL, direction TEXT,
+        initial_risk_reward REAL, final_risk_reward REAL,
+        profit TEXT, result TEXT,
+        zones_rectX1_DLY TEXT, zones_rectY1_DLY REAL, zones_rectY2_DLY REAL,
+        zones_rectX1_H4 TEXT, zones_rectY1_H4 REAL, zones_rectY2_H4 REAL,
+        pattern_x1 TEXT, pattern_y1 REAL, pattern_y2 REAL,
+        breakup_date TEXT, fibonacci100 REAL
+    )
+'''
+
 stop_requested = False
 current_child = None
+work_dir = None  # backtest/years/<anno>, impostata in main()
+work_db = None   # working DB del run corrente
 
 
 def log(log_type, message, pair=None, details=None):
@@ -74,12 +96,22 @@ def log(log_type, message, pair=None, details=None):
     print(f"[{log_type}] {f'[{pair}] ' if pair else ''}{message}", flush=True)
 
 
+def init_work_db():
+    """Crea (se serve) il working DB dell'anno con lo schema completo.
+    Necessario: il motore non crea mai la tabella e su un DB nuovo di zecca
+    i suoi INSERT a 25 colonne fallirebbero."""
+    conn = sqlite3.connect(str(work_db))
+    conn.execute(TRADES_DDL)
+    conn.commit()
+    conn.close()
+
+
 def count_pair_trades(pair):
-    """Numero di righe in trades per la coppia nel DB del motore (0 se assente)."""
-    if not ENGINE_DB.exists():
+    """Numero di righe in trades per la coppia nel working DB (0 se assente)."""
+    if not work_db or not work_db.exists():
         return 0
     try:
-        conn = sqlite3.connect(str(ENGINE_DB))
+        conn = sqlite3.connect(str(work_db))
         n = conn.execute('SELECT COUNT(*) FROM trades WHERE pair = ?', (pair,)).fetchone()[0]
         conn.close()
         return n
@@ -88,19 +120,20 @@ def count_pair_trades(pair):
 
 
 def clean_pairs(pairs):
-    """Rimuove dal DB del motore i trade esistenti delle coppie selezionate."""
-    if not ENGINE_DB.exists():
+    """Rimuove dal working DB i trade esistenti delle coppie selezionate."""
+    if not work_db.exists():
         return
     try:
-        conn = sqlite3.connect(str(ENGINE_DB))
+        conn = sqlite3.connect(str(work_db))
         placeholders = ','.join('?' for _ in pairs)
         deleted = conn.execute(
             f'DELETE FROM trades WHERE pair IN ({placeholders})', pairs).rowcount
         conn.commit()
         conn.close()
-        log('SYSTEM', f'Cleared {deleted} existing trades for {len(pairs)} pair(s)')
+        if deleted:
+            log('SYSTEM', f'Cleared {deleted} existing trades for {len(pairs)} pair(s)')
     except sqlite3.Error as e:
-        log('WARNING', f'Could not clean engine database: {e}')
+        log('WARNING', f'Could not clean working database: {e}')
 
 
 def handle_stop(signum, frame):
@@ -118,7 +151,7 @@ def run_pair(pair, datefrom, dateto, credentials):
     log('INFO', f'Starting backtest ({datefrom[6:10]}: {datefrom[:5]} -> {dateto[:5]})', pair)
 
     cmd = [
-        ENGINE_PYTHON, 'martina_BT.py',
+        ENGINE_PYTHON, str(ENGINE_DIR / 'martina_BT.py'),
         '-l', credentials['login'],
         '-p', credentials['password'],
         '-u', credentials['url'],
@@ -134,8 +167,10 @@ def run_pair(pair, datefrom, dateto, credentials):
     with open(ENGINE_OUTPUT_LOG, 'ab') as out:
         out.write(f'\n===== {pair} {datefrom} -> {dateto} @ {datetime.now()} =====\n'.encode())
         out.flush()
+        # cwd = cartella dell'anno: il motore apre 'my_database.db' relativo
+        # alla cwd, quindi scrive nel DB dedicato all'anno
         current_child = subprocess.Popen(
-            cmd, cwd=str(ENGINE_DIR), stdout=out, stderr=subprocess.STDOUT)
+            cmd, cwd=str(work_dir), stdout=out, stderr=subprocess.STDOUT)
 
         last_heartbeat = started
         while current_child.poll() is None:
@@ -206,6 +241,14 @@ def main():
                      '(set BACKTEST_ENGINE_DIR or place the MP-DH415-BT project there)')
         sys.exit(1)
 
+    # Un working DB per anno (dall'anno di --datefrom): backtest/years/<anno>/
+    global work_dir, work_db
+    year = args.datefrom.split(' ')[0].split('.')[2]
+    work_dir = YEARS_DIR / year
+    work_dir.mkdir(parents=True, exist_ok=True)
+    work_db = work_dir / 'my_database.db'
+    init_work_db()
+
     credentials = {
         'login': os.getenv('FXCM_LOGIN_ID', ''),
         'password': os.getenv('FXCM_PASSWORD', ''),
@@ -222,7 +265,7 @@ def main():
     ENGINE_OUTPUT_LOG.write_bytes(b'')
 
     log('SYSTEM', f'Backtest started: {len(pairs)} pair(s), '
-                  f'{args.datefrom[:10]} -> {args.dateto[:10]}'
+                  f'{args.datefrom[:10]} -> {args.dateto[:10]} (database: {year})'
                   + (' (cleaning selected pairs first)' if args.clean else ''))
 
     if args.clean:

@@ -48,7 +48,7 @@ function RunBacktestModal({ isOpen, onClose, onStarted }) {
       if (!response.ok || !data.success) {
         throw new Error(data.error || `HTTP ${response.status}`)
       }
-      onStarted?.()
+      onStarted?.(year)
       onClose()
     } catch (err) {
       setError(err.message)
