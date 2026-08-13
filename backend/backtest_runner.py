@@ -40,7 +40,7 @@ ENGINE_DIR = Path(os.getenv('BACKTEST_ENGINE_DIR', str(_REPO_ROOT.parent / 'MP-D
 ENGINE_PYTHON = os.getenv('BACKTEST_PYTHON', sys.executable)
 ENGINE_OUTPUT_LOG = _REPO_ROOT / 'backtest' / 'engine_output.log'
 YEARS_DIR = _REPO_ROOT / 'backtest' / 'years'
-PAIR_TIMEOUT = int(os.getenv('BACKTEST_PAIR_TIMEOUT', 7200))
+PAIR_TIMEOUT = int(os.getenv('BACKTEST_PAIR_TIMEOUT', 21600))
 HEARTBEAT_SECONDS = 60
 
 ERROR_MARKERS = ('Traceback', 'Exception', 'exception', 'LOGIN_FAILED', 'failed', 'Error:')

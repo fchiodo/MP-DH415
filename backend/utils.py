@@ -39,11 +39,45 @@ def format_history(hist, timeframe):
 
     return history
 
+# ---------------------------------------------------------------------------
+# Ottimizzazione lookup (nessun cambio di semantica).
+# Le date dei dati FXCM sono stringhe immutabili in formato %m.%d.%Y %H:%M:%S:
+# il parse viene messo in cache e fatto con formato esplicito (pandas senza
+# formato "indovina" lo stesso formato a ogni chiamata, con costo enorme).
+# _KijunDict e' un dict {Timestamp: kijun} con indici precalcolati usati da
+# get_last_hour / get_nearest_lower_kijun_h4 al posto delle scansioni lineari.
+# ---------------------------------------------------------------------------
+from bisect import bisect_left
+
+_PD_DT_CACHE = {}
+_STRPTIME_CACHE = {}
+
+
+def _to_dt(date_str):
+    ts = _PD_DT_CACHE.get(date_str)
+    if ts is None:
+        ts = pd.to_datetime(date_str, format='%m.%d.%Y %H:%M:%S')
+        _PD_DT_CACHE[date_str] = ts
+    return ts
+
+
+def _strptime_mdy(date_str):
+    dt = _STRPTIME_CACHE.get(date_str)
+    if dt is None:
+        dt = datetime.strptime(date_str, '%m.%d.%Y %H:%M:%S')
+        _STRPTIME_CACHE[date_str] = dt
+    return dt
+
+
+class _KijunDict(dict):
+    __slots__ = ('by_date', 'sorted_keys')
+
+
 def calculate_kijun(history, kijun_period):
-    kijun = {}
+    kijun = _KijunDict()
 
     for i in range(kijun_period, len(history)):
-        dt = pd.to_datetime(history[i]["Date"])
+        dt = _to_dt(history[i]["Date"])
         kijun_value = 0
         highestBidHigh = -100000
         lowestBidLow = 100000
@@ -54,10 +88,24 @@ def calculate_kijun(history, kijun_period):
         kijun_value =  (highestBidHigh + lowestBidLow) / 2
         kijun[dt] = kijun_value
 
+    # Indici per lookup O(1)/O(log n): stessa semantica delle scansioni lineari
+    # (by_date: ultima chiave di ogni giorno, in ordine di inserimento)
+    kijun.by_date = {}
+    for _k in kijun.keys():
+        kijun.by_date[_k.date()] = _k
+    kijun.sorted_keys = sorted(kijun.keys())
     return kijun
 
 def get_last_hour(kijun_h4, date_str):
     target_date = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').date()
+    # Fast path: indice precalcolato (ultima chiave del giorno, poi giorno
+    # precedente) — identico alla scansione lineare sottostante
+    by_date = getattr(kijun_h4, 'by_date', None)
+    if by_date is not None:
+        last_hour = by_date.get(target_date)
+        if last_hour is None:
+            last_hour = by_date.get(target_date - timedelta(days=1))
+        return last_hour
     last_hour = None
     last_hour_exception = None
     for hour in kijun_h4.keys():
@@ -156,7 +204,7 @@ def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate, str_instru
     log_trader(f'history[index]: {history[index]}', pair=str_instrument)
     log_trader(f'timerange: {timerange}', pair=str_instrument)
 
-    dt = pd.to_datetime(history[index]["Date"])
+    dt = _to_dt(history[index]["Date"])
    
     # Add one day to the datetime object to adjust the history daily error
     if timerange == 'DLY':
@@ -181,7 +229,7 @@ def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate, str_instru
         high_kijun_touch = []
         kijun_touch = False
 
-        zone_datetime = datetime.strptime(history[index-1]['Date'], '%m.%d.%Y %H:%M:%S')
+        zone_datetime = _strptime_mdy(history[index-1]['Date'])
         zone_date = zone_datetime.date()
         try:
             zone_last_date = zone_date.replace(year=zone_date.year - 1)
@@ -192,14 +240,14 @@ def get_zones(history, kijun_h4, index, timerange, type, dlyZoneDate, str_instru
                 raise
 
         for i in range(index-1, -1, -1):
-            history_date_datetime = datetime.strptime(history[i]['Date'], '%m.%d.%Y %H:%M:%S')
+            history_date_datetime = _strptime_mdy(history[i]['Date'])
             history_date_date = history_date_datetime.date()
 
             if history_date_date < zone_last_date:
                 break
             
             # Ottieni il valore del Kijun per questa candela
-            candle_dt = pd.to_datetime(history[i]["Date"])
+            candle_dt = _to_dt(history[i]["Date"])
             if timerange == 'DLY':
                 candle_dt = candle_dt + timedelta(days=1)
             candle_dt_str = get_last_hour(kijun_h4, candle_dt.strftime('%Y-%m-%d %H:%M:%S'))
@@ -363,7 +411,7 @@ def get_resistences(history, index, session, timerange, dlyZoneDate, kijun_h4=No
     low_kijun_touch = []
     kijun_touch = False
 
-    zone_datetime = datetime.strptime(history[index-1]['Date'], '%m.%d.%Y %H:%M:%S')
+    zone_datetime = _strptime_mdy(history[index-1]['Date'])
     zone_date = zone_datetime.date()
 
     try:
@@ -375,7 +423,7 @@ def get_resistences(history, index, session, timerange, dlyZoneDate, kijun_h4=No
             raise
 
     for i in range(index-1, -1, -1):
-        history_date_datetime = datetime.strptime(history[i]['Date'], '%m.%d.%Y %H:%M:%S')
+        history_date_datetime = _strptime_mdy(history[i]['Date'])
         history_date_date = history_date_datetime.date()
 
         if history_date_date < zone_last_date:
@@ -383,7 +431,7 @@ def get_resistences(history, index, session, timerange, dlyZoneDate, kijun_h4=No
         
         # Ottieni il valore del Kijun per questa candela
         if kijun_h4:
-            candle_dt = pd.to_datetime(history[i]["Date"])
+            candle_dt = _to_dt(history[i]["Date"])
             if timerange == 'DLY':
                 candle_dt = candle_dt + timedelta(days=1)
             candle_dt_str = get_last_hour(kijun_h4, candle_dt.strftime('%Y-%m-%d %H:%M:%S'))
@@ -515,7 +563,7 @@ def get_resistences(history, index, session, timerange, dlyZoneDate, kijun_h4=No
 
     # Validazione finale: verifica che la zona non sia stata rotta (come nel PineScript)
     if kijun_h4 and zones_rectY1 and zones_rectY2:
-        dt = pd.to_datetime(history[index]["Date"])
+        dt = _to_dt(history[index]["Date"])
         if timerange == 'DLY':
             dt = dt + timedelta(days=1)
         dt_str = get_last_hour(kijun_h4, dt.strftime('%Y-%m-%d %H:%M:%S'))
@@ -558,7 +606,8 @@ def send_slack_message(channel, message):
             text=message
         )
         print(f"Message sent: {response['ts']}")
-    except SlackApiError as e:
+    except Exception as e:
+        # best-effort: un errore Slack (API o rete/DNS) non deve interrompere
         print(f"Error sending message: {e}")
 
 # Function to open a trade
@@ -1026,7 +1075,7 @@ def get_pattern_m15_RES(history,kijun_h4, zone_rectX1_h4, zone_rectX2_h4, zone_r
              
 def get_nearest_lower_kijun_h4(candle_15_min, kijun_h4):
 
-    target_date = datetime.strptime(candle_15_min["Date"], '%m.%d.%Y %H:%M:%S').date()
+    target_date = _strptime_mdy(candle_15_min["Date"]).date()
     times = [time(1, 0), time(5, 0), time(9, 0), time(13, 0), time(17, 0), time(21, 0)]
     
     # Create a list of datetime objects by combining the target date with each time
@@ -1053,7 +1102,20 @@ def get_nearest_lower_kijun_h4(candle_15_min, kijun_h4):
 
     #formatted_timestamp = key_timestamp.strftime('%m.%d.%Y %H:%M:%S')
     if key_timestamp not in kijun_h4:
-        key_timestamp = min(kijun_h4.keys(), key=lambda x: abs((x - key_timestamp).total_seconds()))
+        sorted_keys = getattr(kijun_h4, 'sorted_keys', None)
+        if sorted_keys:
+            # bisect: stesso risultato del min() lineare, incluso il
+            # tie-breaking (a parita' di distanza vince la chiave precedente,
+            # come nel min() su chiavi in ordine cronologico)
+            pos = bisect_left(sorted_keys, key_timestamp)
+            candidates = []
+            if pos > 0:
+                candidates.append(sorted_keys[pos - 1])
+            if pos < len(sorted_keys):
+                candidates.append(sorted_keys[pos])
+            key_timestamp = min(candidates, key=lambda x: abs((x - key_timestamp).total_seconds()))
+        else:
+            key_timestamp = min(kijun_h4.keys(), key=lambda x: abs((x - key_timestamp).total_seconds()))
     
     return kijun_h4[key_timestamp]
 
@@ -1309,7 +1371,7 @@ def process_trades_LONG(history_DLY, zone_rectY1_DLY, history_15, pair, start_in
             update_trade_target_ALL(pair, entry_price, risk_reward)
 
         # check if H4 was broken
-        dt = pd.to_datetime(history_15[index]["Date"], format='%m.%d.%Y %H:%M:%S')
+        dt = _to_dt(history_15[index]["Date"])
         if dt in kijun_h4.keys():
             h4BidClose = get_H4BidClose(history_15[index]["Date"], history_H4)
             print ('******* h4BidClose: '+str(h4BidClose)+' - zone_rectY1_H4: '+str(zone_rectY1_H4))
@@ -1429,7 +1491,7 @@ def process_trades_SHORT(history_DLY, zone_rectY1_DLY, history_15, pair, start_i
             update_trade_target_ALL(pair, entry_price, risk_reward) 
 
         # check if H4 was broken
-        dt = pd.to_datetime(history_15[index]["Date"], format='%m.%d.%Y %H:%M:%S')
+        dt = _to_dt(history_15[index]["Date"])
         if dt in kijun_h4.keys():
             h4BidClose = get_H4BidClose(history_15[index]["Date"], history_H4)
             print ('******* h4BidClose: '+str(h4BidClose)+' - zone_rectY1_H4: '+str(zone_rectY1_H4))

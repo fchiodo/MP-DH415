@@ -1512,5 +1512,6 @@ def send_slack_message(channel, message):
             text=message
         )
         print(f"Message sent: {response['ts']}")
-    except SlackApiError as e:
+    except Exception as e:
+        # best-effort: un errore Slack (API o rete/DNS) non deve interrompere
         print(f"Error sending message: {e}")
